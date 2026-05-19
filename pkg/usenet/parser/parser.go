@@ -661,10 +661,22 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 		return wrapNZBFile(p.processMediaFile(group, password))
 	case storage.NZBFileTypeRar:
 		rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
-		return rarParser.Process(ctx, group, password)
+		files, err := rarParser.Process(ctx, group, password)
+		if err != nil && strings.Contains(err.Error(), "unknown RAR format") {
+			p.logger.Warn().Str("group", group.BaseName).Msg("RAR parser failed with unknown format, attempting fallback to SevenZip parser")
+			zipParser := NewSevenZParser(p.manager, p.maxConcurrent, p.logger)
+			return zipParser.Process(ctx, group, password)
+		}
+		return files, err
 	case storage.NZBFileTypeSevenZip:
 		zipParser := NewSevenZParser(p.manager, p.maxConcurrent, p.logger)
-		return zipParser.Process(ctx, group, password)
+		files, err := zipParser.Process(ctx, group, password)
+		if err != nil && strings.Contains(err.Error(), "unexpected id") {
+			p.logger.Warn().Str("group", group.BaseName).Msg("SevenZip parser failed with unexpected id, attempting fallback to RAR parser")
+			rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
+			return rarParser.Process(ctx, group, password)
+		}
+		return files, err
 	case storage.NZBFileTypeZip:
 		zipParser := NewZIPParser(p.manager, p.maxConcurrent, p.logger)
 		return zipParser.Process(ctx, group, password)
