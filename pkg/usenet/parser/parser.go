@@ -665,7 +665,12 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 		if err != nil && strings.Contains(err.Error(), "unknown RAR format") {
 			p.logger.Warn().Str("group", group.BaseName).Msg("RAR parser failed with unknown format, attempting fallback to SevenZip parser")
 			zipParser := NewSevenZParser(p.manager, p.maxConcurrent, p.logger)
-			return zipParser.Process(ctx, group, password)
+			files, err = zipParser.Process(ctx, group, password)
+			if err != nil && strings.Contains(err.Error(), "unexpected id") {
+				p.logger.Warn().Str("group", group.BaseName).Msg("SevenZip parser also failed, assuming raw split media file")
+				group.Type = storage.NZBFileTypeMedia
+				return wrapNZBFile(p.processMediaFile(group, password))
+			}
 		}
 		return files, err
 	case storage.NZBFileTypeSevenZip:
@@ -674,7 +679,12 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 		if err != nil && strings.Contains(err.Error(), "unexpected id") {
 			p.logger.Warn().Str("group", group.BaseName).Msg("SevenZip parser failed with unexpected id, attempting fallback to RAR parser")
 			rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
-			return rarParser.Process(ctx, group, password)
+			files, err = rarParser.Process(ctx, group, password)
+			if err != nil && strings.Contains(err.Error(), "unknown RAR format") {
+				p.logger.Warn().Str("group", group.BaseName).Msg("RAR parser also failed, assuming raw split media file")
+				group.Type = storage.NZBFileTypeMedia
+				return wrapNZBFile(p.processMediaFile(group, password))
+			}
 		}
 		return files, err
 	case storage.NZBFileTypeZip:
@@ -686,6 +696,10 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 }
 
 func (p *NZBParser) enrichGroupWithFileInfo(ctx context.Context, group *FileGroup) error {
+	if len(group.Files) == 0 {
+		return nil
+	}
+
 	sort.Slice(group.Files, func(i, j int) bool {
 		if group.Files[i].Number != group.Files[j].Number {
 			return group.Files[i].Number < group.Files[j].Number
@@ -693,110 +707,96 @@ func (p *NZBParser) enrichGroupWithFileInfo(ctx context.Context, group *FileGrou
 		return group.Files[i].Filename < group.Files[j].Filename
 	})
 
-	firstFile := group.Files[0]
-	// Find the file with the most segments to use as the reference for segment size
-	// This avoids issues where the first file is a small NFO/NZB with different characteristics
-	maxSegments := 0
-	for _, f := range group.Files {
-		if len(f.Segments) > maxSegments {
-			maxSegments = len(f.Segments)
-			firstFile = f
+	// Use a mapper to fetch metadata for all files.
+	// This is necessary because raw split files or obfuscated archives
+	// can have varying number of segments and sizes per part.
+	type fetchResult struct {
+		index int
+		meta  filePartMeta
+		err   error
+	}
+
+	indices := make([]int, len(group.Files))
+	for i := range indices {
+		indices[i] = i
+	}
+
+	workers := min(len(group.Files), p.maxConcurrent)
+	mapper := iter.Mapper[int, fetchResult]{
+		MaxGoroutines: workers,
+	}
+
+	results := mapper.Map(indices, func(idx *int) fetchResult {
+		i := *idx
+		file := group.Files[i]
+		if len(file.Segments) == 0 {
+			return fetchResult{i, filePartMeta{}, fmt.Errorf("no segments in file %d", i)}
 		}
-	}
 
-	if len(firstFile.Segments) == 0 {
-		return fmt.Errorf("no Segments in reference file of group %s", group.BaseName)
-	}
-	firstSegment := firstFile.Segments[0]
-
-	lastFile := group.Files[len(group.Files)-1]
-	lastSegment := lastFile.Segments[0]
-
-	// If first and last are the same file, only need one fetch
-	sameFile := len(group.Files) == 1
-
-	type headerResult struct {
-		data *nntp.YencMetadata
-		err  error
-	}
-
-	// Fetch both headers in parallel
-	firstCh := make(chan headerResult, 1)
-	lastCh := make(chan headerResult, 1)
-
-	go func() {
 		var data *nntp.YencMetadata
-		// GetHeaderPrefix drains the body and returns the connection to the pool;
-		// we only need yEnc metadata (name/size/offsets), not a decoded snippet.
 		err := p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
-			d, e := conn.GetHeaderPrefix(firstSegment.Id, metadataOnly)
+			d, e := conn.GetHeaderPrefix(file.Segments[0].Id, metadataOnly)
 			data = d
 			return e
 		})
-		firstCh <- headerResult{data, err}
-	}()
 
-	if !sameFile {
-		go func() {
-			var data *nntp.YencMetadata
-			err := p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
-				d, e := conn.GetHeaderPrefix(lastSegment.Id, metadataOnly)
-				data = d
-				return e
-			})
-			lastCh <- headerResult{data, err}
-		}()
+		if err != nil {
+			return fetchResult{i, filePartMeta{}, err}
+		}
+
+		return fetchResult{
+			index: i,
+			meta: filePartMeta{
+				fileSize:    data.Size,
+				segmentSize: data.End - data.Begin + 1,
+			},
+		}
+	})
+
+	if group.fileMeta == nil {
+		group.fileMeta = make(map[string]filePartMeta)
 	}
 
-	// Wait for first result
-	var firstResult headerResult
-	select {
-	case firstResult = <-firstCh:
-	case <-ctx.Done():
-		return ctx.Err()
+	for _, res := range results {
+		if res.err != nil {
+			p.logger.Debug().Err(res.err).Int("index", res.index).Msg("Failed to fetch metadata for file part, will use estimation")
+			continue
+		}
+
+		metaKey := fileMetaKey(group.Files[res.index])
+		group.fileMeta[metaKey] = res.meta
 	}
 
-	if firstResult.err != nil {
-		return fmt.Errorf("failed to fetch first segment header: %w", firstResult.err)
-	}
-	yencData := firstResult.data
-
-	// Update the group's filename if the header provides a better one
-	// This fixes issues where the group name is based on a small .nzb file or similar
-	if yencData.Name != "" && group.Type == storage.NZBFileTypeMedia {
-		// Only update if it looks like a valid filename
-		cleanName := utils.RemoveInvalidChars(yencData.Name)
-		if cleanName != "" {
-			group.ActualFilename = cleanName
+	// Set group-wide metadata for backward compatibility (using first file as reference)
+	firstMetaKey := fileMetaKey(group.Files[0])
+	firstMeta, hasFirst := group.fileMeta[firstMetaKey]
+	if !hasFirst {
+		// Fallback to estimation if first file fetch failed
+		reportedBytes := int64(group.Files[0].Segments[0].Bytes)
+		if reportedBytes <= 0 {
+			reportedBytes = 750000
+		}
+		segmentSize := int64(float64(reportedBytes) * 0.97)
+		firstMeta = filePartMeta{
+			segmentSize: segmentSize,
+			fileSize:    segmentSize * int64(len(group.Files[0].Segments)),
 		}
 	}
 
-	segmentSize := yencData.End - yencData.Begin + 1
-	fileSize := yencData.Size
-
-	// get last file size
-	var lastFileSize int64
-	if sameFile {
-		lastFileSize = fileSize
-	} else {
-		var lastResult headerResult
-		select {
-		case lastResult = <-lastCh:
-		case <-ctx.Done():
-			return ctx.Err()
+	lastMetaKey := fileMetaKey(group.Files[len(group.Files)-1])
+	lastMeta, hasLast := group.fileMeta[lastMetaKey]
+	if !hasLast {
+		lastMeta = filePartMeta{
+			fileSize: firstMeta.segmentSize * int64(len(group.Files[len(group.Files)-1].Segments)),
 		}
-
-		if lastResult.err != nil {
-			return fmt.Errorf("failed to fetch last segment header: %w", lastResult.err)
-		}
-		lastFileSize = lastResult.data.Size
 	}
 
 	group.metadata = &fileAnalysisResult{
-		fileSize:     fileSize,
-		lastFileSize: lastFileSize,
-		segmentSize:  segmentSize,
+		fileSize:     firstMeta.fileSize,
+		lastFileSize: lastMeta.fileSize,
+		segmentSize:  firstMeta.segmentSize,
 	}
+
 	return nil
 }
 
@@ -816,11 +816,27 @@ func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage
 	if ext == "" {
 		ext = filepath.Ext(group.ActualFilename)
 	}
+
+	// If the file was falsely classified as an archive initially, its extension might be fake (e.g. .001)
+	if ext != "" && (regexp.MustCompile(`^\.\d+$`).MatchString(ext) || ext == ".rar" || ext == ".7z") {
+		// Attempt to guess correct media extension from group BaseName or default to .mkv
+		baseExt := filepath.Ext(group.BaseName)
+		if utils.IsMediaFile(group.BaseName) {
+			ext = baseExt
+		} else {
+			// fallback extension since it's raw media
+			ext = ".mkv" 
+		}
+	}
+
 	if ext == "" {
 		return nil
 	}
 
-	name := group.BaseName + ext
+	name := group.BaseName
+	if !strings.HasSuffix(strings.ToLower(name), strings.ToLower(ext)) {
+		name = name + ext
+	}
 
 	file := &storage.NZBFile{
 		Name:     name,
