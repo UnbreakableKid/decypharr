@@ -1240,7 +1240,8 @@ class ConfigManager {
             availability_sample_percent: parseInt(document.querySelector('[name="usenet.availability_sample_percent"]')?.value) || 10,
             max_concurrent_nzb: parseInt(document.querySelector('[name="usenet.max_concurrent_nzb"]')?.value) || 2,
             disk_buffer_path: document.querySelector('[name="usenet.disk_buffer_path"]')?.value || "",
-            skip_repair: document.querySelector('[name="usenet.skip_repair"]').checked
+            skip_repair: document.querySelector('[name="usenet.skip_repair"]').checked,
+            deobfuscate: document.querySelector('[name="usenet.deobfuscate"]').checked
         };
     }
 
