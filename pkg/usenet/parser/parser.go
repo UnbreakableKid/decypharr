@@ -35,6 +35,8 @@ type NZBParser struct {
 	logger        zerolog.Logger
 	manager       *nntp.Client // Connection manager for parsing operations
 	maxConcurrent int          // Max concurrent connections
+	par2Files     []nzbparser.NzbFile
+	par2Descs     []Par2FileDesc
 }
 
 type fileAnalysisResult struct {
@@ -146,6 +148,18 @@ func (p *NZBParser) Parse(ctx context.Context, filename string, content []byte) 
 
 	if len(fileGroups) == 0 {
 		return nil, nil, fmt.Errorf("no valid file groups found in NZB")
+	}
+
+	// Collect PAR2 file references for potential deobfuscation
+	p.par2Files = nil
+	p.par2Descs = nil
+	for _, file := range raw.Files {
+		if len(file.Segments) == 0 {
+			continue
+		}
+		if p.detectFileType(file.Filename) == storage.NZBFileTypePar2 {
+			p.par2Files = append(p.par2Files, file)
+		}
 	}
 
 	// Stat the first segment to confirm connectivity
@@ -671,7 +685,7 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 				realZipParser := NewZIPParser(p.manager, p.maxConcurrent, p.logger)
 				files, err = realZipParser.Process(ctx, group, password)
 				if err != nil && (strings.Contains(err.Error(), "central directory") || strings.Contains(err.Error(), "signature not found")) {
-					return nil, fmt.Errorf("archive parsers failed (possibly requires PAR2 repair or unsupported obfuscation)")
+					return p.par2DeobfuscationAttempt(ctx, group, password)
 				}
 			}
 		}
@@ -688,7 +702,7 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 				realZipParser := NewZIPParser(p.manager, p.maxConcurrent, p.logger)
 				files, err = realZipParser.Process(ctx, group, password)
 				if err != nil && (strings.Contains(err.Error(), "central directory") || strings.Contains(err.Error(), "signature not found")) {
-					return nil, fmt.Errorf("archive parsers failed (possibly requires PAR2 repair or unsupported obfuscation)")
+					return p.par2DeobfuscationAttempt(ctx, group, password)
 				}
 			}
 		}
@@ -705,7 +719,7 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 				rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
 				files, err = rarParser.Process(ctx, group, password)
 				if err != nil && strings.Contains(err.Error(), "unknown RAR format") {
-					return nil, fmt.Errorf("archive parsers failed (possibly requires PAR2 repair or unsupported obfuscation)")
+					return p.par2DeobfuscationAttempt(ctx, group, password)
 				}
 			}
 		}
@@ -818,36 +832,6 @@ func (p *NZBParser) enrichGroupWithFileInfo(ctx context.Context, group *FileGrou
 	}
 
 	return nil
-}
-
-func (p *NZBParser) isMediaSignature(ctx context.Context, group *FileGroup) bool {
-	if len(group.Files) == 0 {
-		return false
-	}
-
-	// Make sure we check the actual first file in sequence
-	sort.Slice(group.Files, func(i, j int) bool {
-		return group.Files[i].Number < group.Files[j].Number
-	})
-
-	firstFile := group.Files[0]
-	if len(firstFile.Segments) == 0 {
-		return false
-	}
-
-	firstSegment := firstFile.Segments[0]
-	var data *nntp.YencMetadata
-	err := p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
-		d, e := conn.GetHeaderPrefix(firstSegment.Id, defaultMaxSnippetSize)
-		data = d
-		return e
-	})
-
-	if err != nil || data == nil {
-		return false
-	}
-
-	return p.detectFileTypeFromContent(data.Snippet) == storage.NZBFileTypeMedia
 }
 
 // Process regular media files
