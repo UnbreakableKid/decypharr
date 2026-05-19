@@ -35,7 +35,6 @@ type NZBParser struct {
 	logger        zerolog.Logger
 	manager       *nntp.Client // Connection manager for parsing operations
 	maxConcurrent int          // Max concurrent connections
-	par2Files     []nzbparser.NzbFile
 	par2Descs     []Par2FileDesc
 }
 
@@ -150,17 +149,7 @@ func (p *NZBParser) Parse(ctx context.Context, filename string, content []byte) 
 		return nil, nil, fmt.Errorf("no valid file groups found in NZB")
 	}
 
-	// Collect PAR2 file references for potential deobfuscation
-	p.par2Files = nil
-	p.par2Descs = nil
-	for _, file := range raw.Files {
-		if len(file.Segments) == 0 {
-			continue
-		}
-		if p.detectFileType(file.Filename) == storage.NZBFileTypePar2 {
-			p.par2Files = append(p.par2Files, file)
-		}
-	}
+	p.logger.Debug().Int("groups", len(fileGroups)).Msg("NZB file groups created")
 
 	// Stat the first segment to confirm connectivity
 	checked := false
@@ -197,6 +186,7 @@ func (p *NZBParser) Process(ctx context.Context, nzb *storage.NZB, groups map[st
 	}()
 
 	// Parse each group (with deferred archive option)
+	p.par2Descs = nil
 	files := p.processFileGroups(ctx, groups, nzb.Password)
 
 	if len(files) == 0 {
@@ -305,7 +295,11 @@ func (p *NZBParser) groupFiles(ctx context.Context, files nzbparser.NzbFiles) ma
 
 		fileType := p.detectFileType(file.Filename)
 		if fileType == storage.NZBFileTypePar2 {
-			// ignore PAR2 files for now
+			allFiles = append(allFiles, contentResult{
+				file:           file,
+				fileType:       fileType,
+				actualFilename: file.Filename,
+			})
 			continue
 		}
 
@@ -608,10 +602,21 @@ func (p *NZBParser) processFileGroups(ctx context.Context, groups map[string]*Fi
 	}
 	rarCounts, sevenZCounts, zipCounts, mediaCounts, deferredCounts := 0, 0, 0, 0, 0
 
+	// Process PAR2 groups first to build deobfuscation data
+	for _, g := range groups {
+		if g.Type == storage.NZBFileTypePar2 && len(g.Files) > 0 {
+			p.logger.Debug().Str("group", g.BaseName).Msg("Processing PAR2 group for deobfuscation")
+			_, _ = p.processFileGroup(ctx, g, password)
+		}
+	}
+
 	// Convert map into slice of *values*, not pointers
 	fileGroups := make([]FileGroup, 0, len(groups))
 	for _, g := range groups {
 		if len(g.Files) == 0 {
+			continue
+		}
+		if g.Type == storage.NZBFileTypePar2 {
 			continue
 		}
 		fileGroups = append(fileGroups, *g)
@@ -673,6 +678,8 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 	switch group.Type {
 	case storage.NZBFileTypeMedia:
 		return wrapNZBFile(p.processMediaFile(group, password))
+	case storage.NZBFileTypePar2:
+		return p.processPar2Group(ctx, group)
 	case storage.NZBFileTypeRar:
 		rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
 		files, err := rarParser.Process(ctx, group, password)

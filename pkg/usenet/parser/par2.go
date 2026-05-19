@@ -82,17 +82,14 @@ func parsePar2FileDesc(data []byte) []Par2FileDesc {
 	return descs
 }
 
-func (p *NZBParser) fetchAndParsePar2(ctx context.Context) ([]Par2FileDesc, error) {
-	if len(p.par2Files) == 0 {
-		return nil, nil
+func (p *NZBParser) processPar2Group(ctx context.Context, group *FileGroup) ([]*storage.NZBFile, error) {
+	if len(group.Files) == 0 || len(group.Files[0].Segments) == 0 {
+		return nil, fmt.Errorf("PAR2 group has no files or segments")
 	}
 
-	par2File := &p.par2Files[0]
-	if len(par2File.Segments) == 0 {
-		return nil, fmt.Errorf("PAR2 file has no segments")
-	}
+	p.logger.Debug().Str("group", group.BaseName).Msg("Downloading PAR2 file for deobfuscation")
 
-	firstSegment := par2File.Segments[0]
+	firstSegment := group.Files[0].Segments[0]
 	var data *nntp.YencMetadata
 	err := p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
 		var e error
@@ -100,17 +97,23 @@ func (p *NZBParser) fetchAndParsePar2(ctx context.Context) ([]Par2FileDesc, erro
 		return e
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch PAR2 data: %w", err)
+		p.logger.Warn().Err(err).Msg("Failed to fetch PAR2 segment, deobfuscation not available")
+		return nil, nil
 	}
 	if data == nil || len(data.Snippet) == 0 {
-		return nil, fmt.Errorf("PAR2 data is empty")
+		p.logger.Warn().Msg("PAR2 data is empty, deobfuscation not available")
+		return nil, nil
 	}
 
 	descs := parsePar2FileDesc(data.Snippet)
 	if len(descs) == 0 {
-		return nil, fmt.Errorf("no FileDesc entries found in PAR2")
+		p.logger.Warn().Msg("No FileDesc entries found in PAR2, deobfuscation not available")
+		return nil, nil
 	}
-	return descs, nil
+
+	p.par2Descs = descs
+	p.logger.Info().Int("entries", len(descs)).Msg("PAR2 FileDesc entries loaded for deobfuscation")
+	return nil, nil
 }
 
 func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGroup, descs []Par2FileDesc) (bool, error) {
@@ -143,6 +146,10 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 
 		for _, fd := range descs {
 			if bytes.Equal(hash[:], fd.File16kHash[:]) {
+				p.logger.Debug().
+					Str("old_name", group.Files[i].Filename).
+					Str("new_name", fd.FileName).
+					Msg("PAR2 deobfuscation: renamed file")
 				group.Files[i].Filename = fd.FileName
 				renamed++
 				break
@@ -153,6 +160,8 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 	if renamed == 0 {
 		return false, nil
 	}
+
+	p.logger.Info().Int("renamed", renamed).Msg("PAR2 deobfuscation renamed files")
 
 	for _, f := range group.Files {
 		detected := p.detectFileType(f.Filename)
@@ -181,26 +190,19 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 }
 
 func (p *NZBParser) par2DeobfuscationAttempt(ctx context.Context, group *FileGroup, password string) ([]*storage.NZBFile, error) {
-	if len(p.par2Files) == 0 {
-		return nil, fmt.Errorf("archive parsers failed (possibly requires PAR2 repair or unsupported obfuscation)")
+	if len(p.par2Descs) == 0 {
+		p.logger.Warn().Str("group", group.BaseName).Msg("PAR2 deobfuscation unavailable: no FileDesc entries loaded")
+		return nil, fmt.Errorf("archive parsers failed and no PAR2 data available (possibly requires PAR2 repair or unsupported obfuscation)")
 	}
 
 	p.logger.Warn().Str("group", group.BaseName).Msg("All archive parsers failed, attempting PAR2 deobfuscation")
 
-	if p.par2Descs == nil {
-		descs, err := p.fetchAndParsePar2(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("archive parsers failed and PAR2 deobfuscation failed: %w", err)
-		}
-		p.par2Descs = descs
-	}
-
 	renamed, err := p.deobfuscateGroupWithPar2(ctx, group, p.par2Descs)
 	if err != nil || !renamed {
 		if err != nil {
-			return nil, fmt.Errorf("archive parsers failed and PAR2 deobfuscation error: %w", err)
+			return nil, fmt.Errorf("PAR2 deobfuscation error: %w", err)
 		}
-		return nil, fmt.Errorf("archive parsers failed and PAR2 deobfuscation could not match any files")
+		return nil, fmt.Errorf("PAR2 deobfuscation could not match any files in group %s", group.BaseName)
 	}
 
 	p.logger.Warn().Str("group", group.BaseName).Str("type", string(group.Type)).Msg("PAR2 deobfuscation successful, retrying archive parsing")
