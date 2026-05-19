@@ -28,6 +28,14 @@ type Par2FileDesc struct {
 	FileName    string
 }
 
+var (
+	magic7z  = []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}
+	magicRar4 = []byte{0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00}
+	magicRar5 = []byte{0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00}
+	magicZip  = []byte{0x50, 0x4B, 0x03, 0x04}
+	magicGzip = []byte{0x1F, 0x8B}
+)
+
 func parsePar2FileDesc(data []byte) []Par2FileDesc {
 	var descs []Par2FileDesc
 	offset := 0
@@ -163,14 +171,6 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 
 	p.logger.Info().Int("renamed", renamed).Msg("PAR2 deobfuscation renamed files")
 
-	for _, f := range group.Files {
-		detected := p.detectFileType(f.Filename)
-		if detected == storage.NZBFileTypeRar || detected == storage.NZBFileTypeZip || detected == storage.NZBFileTypeSevenZip {
-			group.Type = detected
-			break
-		}
-	}
-
 	firstOrig := ""
 	for _, f := range group.Files {
 		if f.Filename != "" {
@@ -186,10 +186,63 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 		}
 	}
 
+	detected := p.detectArchiveTypeFromContent(ctx, group)
+	if detected != storage.NZBFileTypeUnknown {
+		group.Type = detected
+	} else {
+		for _, f := range group.Files {
+			d := p.detectFileType(f.Filename)
+			if d == storage.NZBFileTypeRar || d == storage.NZBFileTypeZip || d == storage.NZBFileTypeSevenZip {
+				group.Type = d
+				break
+			}
+		}
+	}
+
 	return true, nil
 }
 
+func (p *NZBParser) detectArchiveTypeFromContent(ctx context.Context, group *FileGroup) storage.NZBFileType {
+	if len(group.Files) == 0 || len(group.Files[0].Segments) == 0 {
+		return storage.NZBFileTypeUnknown
+	}
+
+	var data *nntp.YencMetadata
+	err := p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
+		var e error
+		data, e = conn.GetHeaderPrefix(group.Files[0].Segments[0].Id, 64)
+		return e
+	})
+	if err != nil || data == nil || len(data.Snippet) < 4 {
+		return storage.NZBFileTypeUnknown
+	}
+
+	snip := data.Snippet
+
+	switch {
+	case len(snip) >= 8 && bytes.Equal(snip[:8], magicRar5):
+		return storage.NZBFileTypeRar
+	case len(snip) >= 7 && bytes.Equal(snip[:7], magicRar4):
+		return storage.NZBFileTypeRar
+	case len(snip) >= 6 && bytes.Equal(snip[:6], magic7z):
+		return storage.NZBFileTypeSevenZip
+	case len(snip) >= 4 && bytes.Equal(snip[:4], magicZip):
+		return storage.NZBFileTypeZip
+	case len(snip) >= 2 && bytes.Equal(snip[:2], magicGzip):
+		return storage.NZBFileTypeZip
+	default:
+		return storage.NZBFileTypeUnknown
+	}
+}
+
 func (p *NZBParser) par2DeobfuscationAttempt(ctx context.Context, group *FileGroup, password string) ([]*storage.NZBFile, error) {
+	if group.par2Attempted {
+		p.logger.Warn().Str("group", group.BaseName).Msg("PAR2 deobfuscation already attempted for this group, skipping")
+		return nil, fmt.Errorf("archive parsers failed after PAR2 deobfuscation for group %s", group.BaseName)
+	}
+
+	group.par2Attempted = true
+
 	if len(p.par2Descs) == 0 {
 		p.logger.Warn().Str("group", group.BaseName).Msg("PAR2 deobfuscation unavailable: no FileDesc entries loaded")
 		return nil, fmt.Errorf("archive parsers failed and no PAR2 data available (possibly requires PAR2 repair or unsupported obfuscation)")

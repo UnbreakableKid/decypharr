@@ -69,6 +69,7 @@ type FileGroup struct {
 	metadata       *fileAnalysisResult
 	fileMeta       map[string]filePartMeta
 	Groups         map[string]struct{}
+	par2Attempted  bool
 }
 
 func (f *FileGroup) getMetadata() *fileAnalysisResult {
