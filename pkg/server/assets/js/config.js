@@ -1668,13 +1668,18 @@ class ConfigManager {
             'availability_sample_percent': usenet.availability_sample_percent,
             'max_concurrent_nzb': usenet.max_concurrent_nzb,
             'disk_buffer_path': usenet.disk_buffer_path,
-            'skip_repair': usenet.skip_repair
+            'skip_repair': usenet.skip_repair,
+            'deobfuscate': usenet.deobfuscate
         };
 
         Object.entries(streamFields).forEach(([id, value]) => {
             const input = document.getElementsByName(`usenet.${id}`)[0];
             if (input && value !== undefined) {
-                input.value = value;
+                if (input.type === 'checkbox') {
+                    input.checked = value;
+                } else {
+                    input.value = value;
+                }
             }
         });
     }
