@@ -44,7 +44,61 @@ func getRARVolumeOrder(filename string) int {
 		}
 	}
 
+	// .001, .002 etc (sometimes used by RAR, often by 7z)
+	if regexp.MustCompile(`^\.\d+$`).MatchString(ext) {
+		numStr := ext[1:]
+		if num, err := strconv.Atoi(numStr); err == nil {
+			return num
+		}
+	}
+
 	// Unknown pattern, put at end
+	return 999999
+}
+
+func get7zVolumeOrder(filename string) int {
+	lower := strings.ToLower(filename)
+	ext := filepath.Ext(lower)
+
+	// .001, .002 etc
+	if regexp.MustCompile(`^\.\d+$`).MatchString(ext) {
+		numStr := ext[1:]
+		if num, err := strconv.Atoi(numStr); err == nil {
+			return num
+		}
+	}
+
+	if ext == ".7z" {
+		return 0
+	}
+
+	return 999999
+}
+
+func getZIPVolumeOrder(filename string) int {
+	lower := strings.ToLower(filename)
+	ext := filepath.Ext(lower)
+
+	if ext == ".zip" {
+		return 0
+	}
+
+	// .z01, .z02 etc
+	if len(ext) == 4 && ext[0:2] == ".z" {
+		numStr := ext[2:]
+		if num, err := strconv.Atoi(numStr); err == nil {
+			return num
+		}
+	}
+
+	// .001, .002 etc
+	if regexp.MustCompile(`^\.\d+$`).MatchString(ext) {
+		numStr := ext[1:]
+		if num, err := strconv.Atoi(numStr); err == nil {
+			return num
+		}
+	}
+
 	return 999999
 }
 

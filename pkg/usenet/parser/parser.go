@@ -667,9 +667,12 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 			zipParser := NewSevenZParser(p.manager, p.maxConcurrent, p.logger)
 			files, err = zipParser.Process(ctx, group, password)
 			if err != nil && strings.Contains(err.Error(), "unexpected id") {
-				p.logger.Warn().Str("group", group.BaseName).Msg("SevenZip parser also failed, assuming raw split media file")
-				group.Type = storage.NZBFileTypeMedia
-				return wrapNZBFile(p.processMediaFile(group, password))
+				p.logger.Warn().Str("group", group.BaseName).Msg("SevenZip parser also failed, attempting fallback to ZIP parser")
+				realZipParser := NewZIPParser(p.manager, p.maxConcurrent, p.logger)
+				files, err = realZipParser.Process(ctx, group, password)
+				if err != nil && (strings.Contains(err.Error(), "central directory") || strings.Contains(err.Error(), "signature not found")) {
+					return nil, fmt.Errorf("archive parsers failed (possibly requires PAR2 repair or unsupported obfuscation)")
+				}
 			}
 		}
 		return files, err
@@ -681,15 +684,32 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 			rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
 			files, err = rarParser.Process(ctx, group, password)
 			if err != nil && strings.Contains(err.Error(), "unknown RAR format") {
-				p.logger.Warn().Str("group", group.BaseName).Msg("RAR parser also failed, assuming raw split media file")
-				group.Type = storage.NZBFileTypeMedia
-				return wrapNZBFile(p.processMediaFile(group, password))
+				p.logger.Warn().Str("group", group.BaseName).Msg("RAR parser also failed, attempting fallback to ZIP parser")
+				realZipParser := NewZIPParser(p.manager, p.maxConcurrent, p.logger)
+				files, err = realZipParser.Process(ctx, group, password)
+				if err != nil && (strings.Contains(err.Error(), "central directory") || strings.Contains(err.Error(), "signature not found")) {
+					return nil, fmt.Errorf("archive parsers failed (possibly requires PAR2 repair or unsupported obfuscation)")
+				}
 			}
 		}
 		return files, err
 	case storage.NZBFileTypeZip:
 		zipParser := NewZIPParser(p.manager, p.maxConcurrent, p.logger)
-		return zipParser.Process(ctx, group, password)
+		files, err := zipParser.Process(ctx, group, password)
+		if err != nil && (strings.Contains(err.Error(), "central directory") || strings.Contains(err.Error(), "signature not found")) {
+			p.logger.Warn().Str("group", group.BaseName).Msg("ZIP parser failed, attempting fallback to SevenZip parser")
+			sevenZParser := NewSevenZParser(p.manager, p.maxConcurrent, p.logger)
+			files, err = sevenZParser.Process(ctx, group, password)
+			if err != nil && strings.Contains(err.Error(), "unexpected id") {
+				p.logger.Warn().Str("group", group.BaseName).Msg("SevenZip parser also failed, attempting fallback to RAR parser")
+				rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
+				files, err = rarParser.Process(ctx, group, password)
+				if err != nil && strings.Contains(err.Error(), "unknown RAR format") {
+					return nil, fmt.Errorf("archive parsers failed (possibly requires PAR2 repair or unsupported obfuscation)")
+				}
+			}
+		}
+		return files, err
 	default:
 		return nil, fmt.Errorf("unsupported file type: %v", group.Type)
 	}
@@ -800,6 +820,36 @@ func (p *NZBParser) enrichGroupWithFileInfo(ctx context.Context, group *FileGrou
 	return nil
 }
 
+func (p *NZBParser) isMediaSignature(ctx context.Context, group *FileGroup) bool {
+	if len(group.Files) == 0 {
+		return false
+	}
+
+	// Make sure we check the actual first file in sequence
+	sort.Slice(group.Files, func(i, j int) bool {
+		return group.Files[i].Number < group.Files[j].Number
+	})
+
+	firstFile := group.Files[0]
+	if len(firstFile.Segments) == 0 {
+		return false
+	}
+
+	firstSegment := firstFile.Segments[0]
+	var data *nntp.YencMetadata
+	err := p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
+		d, e := conn.GetHeaderPrefix(firstSegment.Id, defaultMaxSnippetSize)
+		data = d
+		return e
+	})
+
+	if err != nil || data == nil {
+		return false
+	}
+
+	return p.detectFileTypeFromContent(data.Snippet) == storage.NZBFileTypeMedia
+}
+
 // Process regular media files
 func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage.NZBFile {
 	if len(group.Files) == 0 {
@@ -825,7 +875,7 @@ func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage
 			ext = baseExt
 		} else {
 			// fallback extension since it's raw media
-			ext = ".mkv" 
+			ext = ".mkv"
 		}
 	}
 
