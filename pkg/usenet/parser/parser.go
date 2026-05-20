@@ -32,10 +32,12 @@ var (
 
 // NZBParser provides a simplified, robust NZB parser
 type NZBParser struct {
-	logger        zerolog.Logger
-	manager       *nntp.Client // Connection manager for parsing operations
-	maxConcurrent int          // Max concurrent connections
-	par2Descs     []Par2FileDesc
+	logger          zerolog.Logger
+	manager         *nntp.Client // Connection manager for parsing operations
+	maxConcurrent   int          // Max concurrent connections
+	par2Descs       []Par2FileDesc
+	RepairAttempted bool
+	RepairSkipped   bool
 }
 
 type fileAnalysisResult struct {

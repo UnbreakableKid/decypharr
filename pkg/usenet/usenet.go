@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -367,6 +368,23 @@ func (u *Usenet) Process(ctx context.Context, nzb *storage.NZB, groups map[strin
 	prs := parser.NewParser(u.nntp, u.maxConnections, u.logger.With().Str("component", "parser").Logger())
 	// Process the groups (archives)
 	updatedNZB, err := prs.Process(ctx, nzb, groups)
+	if err != nil && parser.HasPayloadAndPar2Groups(groups) && !config.Get().Usenet.SkipRepair {
+		repairedNZB, repairErr := u.tryRepair(ctx, nzb, groups, err)
+		if repairErr == nil {
+			u.logger.Info().
+				Str("nzb_id", nzb.ID).
+				Str("name", nzb.Name).
+				Int("files", len(repairedNZB.Files)).
+				Msg("Repair succeeded, serving repaired local files")
+			return repairedNZB, nil
+		}
+		u.logger.Warn().
+			Err(repairErr).
+			Str("nzb_id", nzb.ID).
+			Str("name", nzb.Name).
+			Msg("Repair attempted but failed")
+	}
+
 	if err != nil {
 		// Mark as failed
 		_ = u.markAsFailed(nzb, err)
@@ -910,6 +928,171 @@ func (u *Usenet) markAsFailed(nzb *storage.NZB, err error) error {
 		}
 	}
 	return nil
+}
+
+func detectFileType(name string) storage.NZBFileType {
+	lower := strings.ToLower(name)
+	if strings.HasSuffix(lower, ".rar") || strings.HasSuffix(lower, ".r00") || strings.HasSuffix(lower, ".r01") {
+		return storage.NZBFileTypeRar
+	}
+	if strings.HasSuffix(lower, ".7z") || strings.HasSuffix(lower, ".001") {
+		return storage.NZBFileTypeSevenZip
+	}
+	if strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".z01") {
+		return storage.NZBFileTypeZip
+	}
+	if strings.HasSuffix(lower, ".par2") {
+		return storage.NZBFileTypePar2
+	}
+	if strings.HasSuffix(lower, ".mkv") || strings.HasSuffix(lower, ".mp4") ||
+		strings.HasSuffix(lower, ".avi") || strings.HasSuffix(lower, ".mp3") ||
+		strings.HasSuffix(lower, ".m4v") || strings.HasSuffix(lower, ".webm") {
+		return storage.NZBFileTypeMedia
+	}
+	return storage.NZBFileTypeUnknown
+}
+
+func (u *Usenet) tryRepair(ctx context.Context, nzb *storage.NZB, groups map[string]*parser.FileGroup, parseErr error) (*storage.NZB, error) {
+	payloadGroup := parser.FindPayloadGroup(groups)
+	if payloadGroup == nil {
+		return nil, fmt.Errorf("no payload group found for repair")
+	}
+
+	par2Groups := parser.FindPar2Groups(groups)
+	if len(par2Groups) == 0 {
+		return nil, fmt.Errorf("no PAR2 groups found for repair")
+	}
+
+	cfg := config.Get()
+	workspace := NewRepairWorkspace(nzb.ID, payloadGroup.BaseName)
+	if err := workspace.Create(); err != nil {
+		return nil, fmt.Errorf("create repair workspace: %w", err)
+	}
+	defer workspace.Cleanup()
+
+	u.logger.Info().
+		Str("workspace", workspace.Dir).
+		Str("payload_group", payloadGroup.BaseName).
+		Int("par2_groups", len(par2Groups)).
+		Err(parseErr).
+		Msg("Attempting repair after parse failure")
+
+	stager := NewFileStager(u.nntp)
+
+	payloadDest := workspace.StagePayloadDir()
+	for _, sf := range parser.GroupToStorageFiles(payloadGroup) {
+		destPath := filepath.Join(payloadDest, sf.Name)
+		if err := stager.StageFile(ctx, sf, destPath); err != nil {
+			u.logger.Warn().Err(err).Str("file", sf.Name).Msg("Failed to stage payload file, continuing")
+		} else {
+			u.logger.Info().Str("file", sf.Name).Str("dest", destPath).Msg("Staged payload file")
+		}
+	}
+
+	par2Dest := workspace.StagePar2Dir()
+	for _, par2Group := range par2Groups {
+		for _, sf := range parser.GroupToStorageFiles(par2Group) {
+			destPath := filepath.Join(par2Dest, sf.Name)
+			if err := stager.StageFile(ctx, sf, destPath); err != nil {
+				u.logger.Warn().Err(err).Str("file", sf.Name).Msg("Failed to stage PAR2 file")
+				return nil, fmt.Errorf("stage PAR2 file %s: %w", sf.Name, err)
+			}
+			u.logger.Info().Str("file", sf.Name).Str("dest", destPath).Msg("Staged PAR2 file")
+		}
+	}
+
+	indexFile := workspace.FindPar2IndexFile()
+	if indexFile == "" {
+		return nil, fmt.Errorf("no PAR2 index file found in staged PAR2 files")
+	}
+	u.logger.Info().Str("index", indexFile).Msg("Found PAR2 index file")
+
+	tool := NewRepairTool()
+	executable, err := tool.Discover()
+	if err != nil {
+		return nil, fmt.Errorf("discover PAR2 tool: %w", err)
+	}
+
+	timeout, err := time.ParseDuration(cfg.Usenet.RepairTimeout)
+	if err != nil {
+		timeout = 30 * time.Minute
+	}
+
+	args := tool.BuildArgs(indexFile)
+	result := tool.Run(ctx, executable, args, workspace.Dir, timeout)
+
+	u.logger.Info().
+		Str("executable", result.Executable).
+		Strs("args", result.Args).
+		Int("exit_code", result.ExitCode).
+		Dur("duration", result.Duration).
+		Msg("Repair tool completed")
+
+	if !result.Success() {
+		return nil, fmt.Errorf("repair failed (exit %d, duration %s): %s",
+			result.ExitCode, result.Duration, truncateOutput(result.Output, 512))
+	}
+
+	repairedFiles := u.findRepairedFiles(workspace.Dir, payloadGroup)
+	if len(repairedFiles) == 0 {
+		return nil, fmt.Errorf("repair reported success but no repaired files found on disk")
+	}
+
+	localFiles := make([]storage.NZBFile, 0, len(repairedFiles))
+	for _, rf := range repairedFiles {
+		info, err := os.Stat(rf)
+		if err != nil {
+			u.logger.Warn().Err(err).Str("path", rf).Msg("Cannot stat repaired file, skipping")
+			continue
+		}
+		fileName := filepath.Base(rf)
+		fileType := detectFileType(fileName)
+		localFiles = append(localFiles, storage.NZBFile{
+			NzbID:     nzb.ID,
+			Name:      fileName,
+			LocalPath: rf,
+			FileType:  fileType,
+			Size:      info.Size(),
+		})
+		u.logger.Info().
+			Str("file", fileName).
+			Str("local_path", rf).
+			Str("file_type", string(fileType)).
+			Msg("Added repaired local file to NZB")
+	}
+
+	if len(localFiles) == 0 {
+		return nil, fmt.Errorf("no usable repaired files found")
+	}
+
+	nzb.Files = localFiles
+	nzb.Status = "repaired"
+	return nzb, nil
+}
+
+func (u *Usenet) findRepairedFiles(workspaceDir string, payloadGroup *parser.FileGroup) []string {
+	var files []string
+
+	repairedDir := filepath.Join(workspaceDir, "repaired")
+	if entries, err := os.ReadDir(repairedDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				files = append(files, filepath.Join(repairedDir, e.Name()))
+			}
+		}
+		if len(files) > 0 {
+			return files
+		}
+	}
+
+	for _, file := range payloadGroup.Files {
+		payloadPath := filepath.Join(workspaceDir, "payload", file.Filename)
+		if NonEmptyFile(payloadPath) {
+			files = append(files, payloadPath)
+		}
+	}
+
+	return files
 }
 
 func (u *Usenet) Delete(nzoID string) error {

@@ -32,6 +32,7 @@ message NZBFileProto {
   bytes encryption_key = 13;
   bytes encryption_iv = 14;
   bool is_encrypted = 15;
+  string local_path = 16;
 }
 
 // NZB represents the full NZB metadata

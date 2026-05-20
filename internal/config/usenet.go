@@ -37,6 +37,12 @@ type Usenet struct {
 	SkipRepair bool `json:"skip_repair,omitempty"` // Skip repairing nzb/usenet files
 
 	Deobfuscate bool `json:"deobfuscate,omitempty"` // Try to rename obfuscated files
+	
+	// Repair configuration
+	Par2Binary          string `json:"par2_binary,omitempty"`           // Path to par2 executable (default: par2 or from PATH)
+	RepairWorkPath      string `json:"repair_work_path,omitempty"`      // Path for repair staging (empty = main_path/usenet/repair)
+	RepairTimeout       string `json:"repair_timeout,omitempty"`        // Timeout for PAR2 repair execution e.g. "30m", "1h" (default: 30m)
+	KeepRepairArtifacts bool   `json:"keep_repair_artifacts,omitempty"` // If true, do not delete repair workspace on success
 }
 
 func (u Usenet) IsZero() bool {
@@ -75,6 +81,14 @@ func (c *Config) updateUsenetConfig() {
 
 	if c.Usenet.DiskBufferPath == "" {
 		c.Usenet.DiskBufferPath = filepath.Join(GetMainPath(), "usenet", "streams")
+	}
+
+	if c.Usenet.RepairWorkPath == "" {
+		c.Usenet.RepairWorkPath = filepath.Join(GetMainPath(), "usenet", "repair")
+	}
+
+	if c.Usenet.RepairTimeout == "" {
+		c.Usenet.RepairTimeout = "30m" // Default: 30 minutes for PAR2 repair
 	}
 
 	for i, provider := range c.Usenet.Providers {
@@ -149,6 +163,22 @@ func (c *Config) applyUsenetEnvVars() {
 
 	if deobfuscate := getEnv("USENET__DEOBFUSCATE"); deobfuscate != "" {
 		c.Usenet.Deobfuscate = parseBool(deobfuscate)
+	}
+
+	if par2Binary := getEnv("USENET__PAR2_BINARY"); par2Binary != "" {
+		c.Usenet.Par2Binary = par2Binary
+	}
+
+	if repairWorkPath := getEnv("USENET__REPAIR_WORK_PATH"); repairWorkPath != "" {
+		c.Usenet.RepairWorkPath = repairWorkPath
+	}
+
+	if repairTimeout := getEnv("USENET__REPAIR_TIMEOUT"); repairTimeout != "" {
+		c.Usenet.RepairTimeout = repairTimeout
+	}
+
+	if keepRepairArtifacts := getEnv("USENET__KEEP_REPAIR_ARTIFACTS"); keepRepairArtifacts != "" {
+		c.Usenet.KeepRepairArtifacts = parseBool(keepRepairArtifacts)
 	}
 
 	// Usenet providers array
