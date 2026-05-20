@@ -368,44 +368,21 @@ func (u *Usenet) Process(ctx context.Context, nzb *storage.NZB, groups map[strin
 	prs := parser.NewParser(u.nntp, u.maxConnections, u.logger.With().Str("component", "parser").Logger())
 	// Process the groups (archives)
 	updatedNZB, err := prs.Process(ctx, nzb, groups)
-	if err != nil {
-		// Check if repair is possible
-		hasPar2 := parser.HasPayloadAndPar2Groups(groups)
-		skipRepair := config.Get().Usenet.SkipRepair
-
-		if !skipRepair && hasPar2 {
+	if err != nil && parser.HasPayloadAndPar2Groups(groups) && !config.Get().Usenet.SkipRepair {
+		repairedNZB, repairErr := u.tryRepair(ctx, nzb, groups, err)
+		if repairErr == nil {
 			u.logger.Info().
 				Str("nzb_id", nzb.ID).
 				Str("name", nzb.Name).
-				Str("parse_error", err.Error()).
-				Int("payload_groups", len(groups)).
-				Msg("REPAIR START: parser failed, attempting PAR2 repair")
-
-			repairedNZB, repairErr := u.tryRepair(ctx, nzb, groups, err)
-			if repairErr == nil {
-				u.logger.Info().
-					Str("nzb_id", nzb.ID).
-					Str("name", nzb.Name).
-					Int("files", len(repairedNZB.Files)).
-					Msg("REPAIR SUCCESS: repaired files available for streaming from local disk")
-				return repairedNZB, nil
-			}
-			u.logger.Warn().
-				Err(repairErr).
-				Str("nzb_id", nzb.ID).
-				Str("name", nzb.Name).
-				Msg("REPAIR FAILED: PAR2 repair did not produce usable files")
-		} else if hasPar2 {
-			u.logger.Info().
-				Str("nzb_id", nzb.ID).
-				Str("name", nzb.Name).
-				Msg("REPAIR SKIPPED: PAR2 groups exist but SkipRepair is enabled")
-		} else {
-			u.logger.Debug().
-				Str("nzb_id", nzb.ID).
-				Str("name", nzb.Name).
-				Msg("REPAIR NOT POSSIBLE: no PAR2 groups found in NZB")
+				Int("files", len(repairedNZB.Files)).
+				Msg("Repair succeeded, serving repaired local files")
+			return repairedNZB, nil
 		}
+		u.logger.Warn().
+			Err(repairErr).
+			Str("nzb_id", nzb.ID).
+			Str("name", nzb.Name).
+			Msg("Repair attempted but failed")
 	}
 
 	if err != nil {
@@ -994,73 +971,62 @@ func (u *Usenet) tryRepair(ctx context.Context, nzb *storage.NZB, groups map[str
 	defer workspace.Cleanup()
 
 	u.logger.Info().
-		Str("stage", "workspace").
 		Str("workspace", workspace.Dir).
 		Str("payload_group", payloadGroup.BaseName).
 		Int("par2_groups", len(par2Groups)).
 		Err(parseErr).
-		Msg("REPAIR: created workspace, starting file staging")
+		Msg("Attempting repair after parse failure")
 
 	stager := NewFileStager(u.nntp)
 
 	payloadDest := workspace.StagePayloadDir()
-	u.logger.Info().Str("stage", "staging_payload").Str("dir", payloadDest).Int("files", len(payloadGroup.Files)).Msg("REPAIR: staging payload files")
 	for _, sf := range parser.GroupToStorageFiles(payloadGroup) {
 		destPath := filepath.Join(payloadDest, sf.Name)
 		if err := stager.StageFile(ctx, sf, destPath); err != nil {
-			u.logger.Warn().Err(err).Str("file", sf.Name).Msg("REPAIR: failed to stage payload file, continuing")
+			u.logger.Warn().Err(err).Str("file", sf.Name).Msg("Failed to stage payload file, continuing")
 		} else {
-			u.logger.Info().Str("file", sf.Name).Int64("size", sf.Size).Msg("REPAIR: staged payload file")
+			u.logger.Info().Str("file", sf.Name).Str("dest", destPath).Msg("Staged payload file")
 		}
 	}
 
 	par2Dest := workspace.StagePar2Dir()
-	totalPar2Files := 0
-	for _, pg := range par2Groups {
-		totalPar2Files += len(pg.Files)
-	}
-	u.logger.Info().Str("stage", "staging_par2").Str("dir", par2Dest).Int("files", totalPar2Files).Msg("REPAIR: staging PAR2 files")
 	for _, par2Group := range par2Groups {
 		for _, sf := range parser.GroupToStorageFiles(par2Group) {
 			destPath := filepath.Join(par2Dest, sf.Name)
 			if err := stager.StageFile(ctx, sf, destPath); err != nil {
-				u.logger.Warn().Err(err).Str("file", sf.Name).Msg("REPAIR: failed to stage PAR2 file")
+				u.logger.Warn().Err(err).Str("file", sf.Name).Msg("Failed to stage PAR2 file")
 				return nil, fmt.Errorf("stage PAR2 file %s: %w", sf.Name, err)
 			}
+			u.logger.Info().Str("file", sf.Name).Str("dest", destPath).Msg("Staged PAR2 file")
 		}
 	}
-	u.logger.Info().Str("stage", "par2_staged").Int("files", totalPar2Files).Msg("REPAIR: all PAR2 files staged")
 
 	indexFile := workspace.FindPar2IndexFile()
 	if indexFile == "" {
 		return nil, fmt.Errorf("no PAR2 index file found in staged PAR2 files")
 	}
-	u.logger.Info().Str("stage", "index_file").Str("index", indexFile).Msg("REPAIR: using PAR2 index file")
+	u.logger.Info().Str("index", indexFile).Msg("Found PAR2 index file")
 
 	tool := NewRepairTool()
 	executable, err := tool.Discover()
 	if err != nil {
 		return nil, fmt.Errorf("discover PAR2 tool: %w", err)
 	}
-	u.logger.Info().Str("stage", "binary").Str("executable", executable).Msg("REPAIR: found PAR2 binary")
 
 	timeout, err := time.ParseDuration(cfg.Usenet.RepairTimeout)
 	if err != nil {
 		timeout = 30 * time.Minute
 	}
-	u.logger.Info().Str("stage", "execution").Str("executable", executable).Strs("args", []string{"repair", indexFile}).Str("timeout", timeout.String()).Msg("REPAIR: running external PAR2 tool")
 
 	args := tool.BuildArgs(indexFile)
 	result := tool.Run(ctx, executable, args, workspace.Dir, timeout)
 
 	u.logger.Info().
-		Str("stage", "result").
 		Str("executable", result.Executable).
 		Strs("args", result.Args).
 		Int("exit_code", result.ExitCode).
 		Dur("duration", result.Duration).
-		Bool("success", result.Success()).
-		Msg("REPAIR: tool finished")
+		Msg("Repair tool completed")
 
 	if !result.Success() {
 		return nil, fmt.Errorf("repair failed (exit %d, duration %s): %s",
@@ -1069,10 +1035,8 @@ func (u *Usenet) tryRepair(ctx context.Context, nzb *storage.NZB, groups map[str
 
 	repairedFiles := u.findRepairedFiles(workspace.Dir, payloadGroup)
 	if len(repairedFiles) == 0 {
-		u.logger.Warn().Str("stage", "find_results").Str("dir", workspace.Dir).Msg("REPAIR: completed but no repaired files found on disk")
 		return nil, fmt.Errorf("repair reported success but no repaired files found on disk")
 	}
-	u.logger.Info().Str("stage", "find_results").Int("found", len(repairedFiles)).Msg("REPAIR: found repaired files on disk")
 
 	localFiles := make([]storage.NZBFile, 0, len(repairedFiles))
 	for _, rf := range repairedFiles {
