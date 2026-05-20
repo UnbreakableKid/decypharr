@@ -1003,9 +1003,27 @@ func (u *Usenet) tryRepair(ctx context.Context, nzb *storage.NZB, groups map[str
 
 	stager := NewFileStager(u.nntp)
 
+	payloadFiles := parser.GroupToStorageFiles(payloadGroup)
+
+	available, total := u.checkPayloadSegmentsAvailable(ctx, payloadFiles)
+	if total > 0 && available == 0 {
+		u.logger.Warn().
+			Str("stage", "availability_check").
+			Int("files_sampled", len(payloadFiles)).
+			Msg("REPAIR ABORTED: all payload segments are 430 (Not Found) on the server, PAR2 cannot reconstruct missing source data")
+		return nil, fmt.Errorf("payload segments not available on server (430), repair cannot proceed")
+	}
+	if total > 0 && available < total/2 {
+		u.logger.Warn().
+			Str("stage", "availability_check").
+			Int("available", available).
+			Int("total_sampled", total).
+			Msg("REPAIR: less than half of sampled payload segments available, repair may fail")
+	}
+
 	payloadDest := workspace.StagePayloadDir()
-	u.logger.Info().Str("stage", "staging_payload").Str("dir", payloadDest).Int("files", len(payloadGroup.Files)).Msg("REPAIR: staging payload files")
-	for _, sf := range parser.GroupToStorageFiles(payloadGroup) {
+	u.logger.Info().Str("stage", "staging_payload").Str("dir", payloadDest).Int("files", len(payloadFiles)).Msg("REPAIR: staging payload files")
+	for _, sf := range payloadFiles {
 		destPath := filepath.Join(payloadDest, sf.Name)
 		if err := stager.StageFile(ctx, sf, destPath); err != nil {
 			u.logger.Warn().Err(err).Str("file", sf.Name).Msg("REPAIR: failed to stage payload file, continuing")
@@ -1129,6 +1147,45 @@ func (u *Usenet) findRepairedFiles(workspaceDir string, payloadGroup *parser.Fil
 	}
 
 	return files
+}
+
+// checkPayloadSegmentsAvailable samples the first few segments from payload
+// files and returns (available, sampled) counts. This is used to bail early
+// when payload articles are all 430 (Not Found) so we don't hang trying to
+// stage missing segments.
+func (u *Usenet) checkPayloadSegmentsAvailable(ctx context.Context, files []*storage.NZBFile) (int, int) {
+	const samplePerFile = 3
+	var messageIDs []string
+	fileLabels := make([]int, 0)
+
+	for _, f := range files {
+		for i := 0; i < samplePerFile && i < len(f.Segments); i++ {
+			messageIDs = append(messageIDs, f.Segments[i].MessageID)
+			fileLabels = append(fileLabels, len(fileLabels))
+		}
+	}
+
+	if len(messageIDs) == 0 {
+		return 0, 0
+	}
+
+	u.logger.Debug().
+		Int("sample_size", len(messageIDs)).
+		Msg("Checking payload segment availability before staging")
+
+	result, err := u.nntp.BatchStat(ctx, messageIDs)
+	if err != nil {
+		u.logger.Warn().Err(err).Msg("Availability check failed, proceeding with staging anyway")
+		return -1, len(messageIDs)
+	}
+
+	available := result.FoundCount
+	sampled := result.TotalCount
+	u.logger.Debug().
+		Int("available", available).
+		Int("sampled", sampled).
+		Msg("Payload segment availability result")
+	return available, sampled
 }
 
 func (u *Usenet) Delete(nzoID string) error {
