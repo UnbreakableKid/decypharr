@@ -432,9 +432,7 @@ func (p *NZBParser) batchDetectContentTypes(ctx context.Context, unknownFiles []
 
 	processed := make([]contentResult, 0, len(mapped))
 	for _, r := range mapped {
-		if r.fileType != storage.NZBFileTypeUnknown {
-			processed = append(processed, r)
-		}
+		processed = append(processed, r)
 	}
 	return processed
 }
@@ -704,6 +702,11 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 		return wrapNZBFile(p.processMediaFile(group, password))
 	case storage.NZBFileTypePar2:
 		return p.processPar2Group(ctx, group)
+	case storage.NZBFileTypeUnknown:
+		if len(p.par2Descs) > 0 {
+			return p.par2DeobfuscationAttempt(ctx, group, password)
+		}
+		return nil, fmt.Errorf("unsupported file type: %v", group.Type)
 	case storage.NZBFileTypeRar:
 		rarParser := NewRARParser(p.manager, p.maxConcurrent, p.logger)
 		files, err := rarParser.Process(ctx, group, password)

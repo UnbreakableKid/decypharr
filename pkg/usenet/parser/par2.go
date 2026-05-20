@@ -195,7 +195,7 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 	} else {
 		for _, f := range group.Files {
 			d := p.detectFileType(f.Filename)
-			if d == storage.NZBFileTypeRar || d == storage.NZBFileTypeZip || d == storage.NZBFileTypeSevenZip {
+			if d == storage.NZBFileTypeRar || d == storage.NZBFileTypeZip || d == storage.NZBFileTypeSevenZip || d == storage.NZBFileTypeMedia {
 				group.Type = d
 				break
 			}
