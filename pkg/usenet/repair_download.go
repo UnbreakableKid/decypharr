@@ -67,6 +67,7 @@ func (s *FileStager) StageFile(ctx context.Context, file *storage.NZBFile, destP
 }
 
 func (s *FileStager) downloadSegments(ctx context.Context, segments []storage.NZBSegment, totalSize int64, writer io.Writer) error {
+	s.logger.Debug().Int("segments", len(segments)).Int64("total_size", totalSize).Msg("Downloading segments for file staging")
 	type segResult struct {
 		index int
 		data  []byte

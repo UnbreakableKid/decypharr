@@ -36,10 +36,11 @@ func (t *RepairTool) Discover() (string, error) {
 	cfg := config.Get()
 	if cfg.Usenet.Par2Binary != "" {
 		path := cfg.Usenet.Par2Binary
-		t.logger.Info().Str("path", path).Msg("Using configured PAR2 binary")
+		t.logger.Info().Str("path", path).Msg("Using configured PAR2 binary from config.usenet.par2_binary")
 		return path, nil
 	}
 
+	t.logger.Info().Msg("No PAR2 binary configured, searching PATH for par2/par2j/par2repair")
 	candidates := []string{"par2", "par2j", "par2repair"}
 	for _, name := range candidates {
 		path, err := exec.LookPath(name)
@@ -47,6 +48,7 @@ func (t *RepairTool) Discover() (string, error) {
 			t.logger.Info().Str("path", path).Str("name", name).Msg("Found PAR2 binary in PATH")
 			return path, nil
 		}
+		t.logger.Debug().Str("name", name).Msg("PAR2 binary not found in PATH")
 	}
 
 	return "", fmt.Errorf("no PAR2 executable found: configure usenet.par2_binary or install one (par2, par2j, par2repair)")
