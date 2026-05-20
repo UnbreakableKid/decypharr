@@ -460,6 +460,26 @@ func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*Fi
 		} else {
 			groupKey = item.file.Basefilename
 		}
+		if groupKey == "" {
+			groupKey = p.getBaseFilename(item.file.Filename)
+			if groupKey == "" {
+				groupKey = item.file.Filename
+			}
+		}
+
+		// Keep PAR2 files in their own groups even when they share the same logical
+		// base name as the actual payload archive. Releases like
+		// "name.part01.rar" + "name.vol001+01.par2" should produce one RAR group
+		// plus separate PAR2 groups, not a single mixed PAR2-only group.
+		if item.fileType == storage.NZBFileTypePar2 {
+			parName := item.actualFilename
+			if parName == "" {
+				parName = item.file.Filename
+			}
+			if parName != "" {
+				groupKey = "par2::" + parName
+			}
+		}
 
 		group, exists := groups[groupKey]
 		if !exists {

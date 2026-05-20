@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Tensai75/nzbparser"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func TestGetNZBSegmentsUsesPerFileMetadata(t *testing.T) {
@@ -51,6 +52,55 @@ func TestGetNZBSegmentsUsesPerFileMetadata(t *testing.T) {
 	}
 	if segments[1].StartOffset != 80 || segments[1].EndOffset != 149 {
 		t.Fatalf("expected second segment offsets 80-149, got %d-%d", segments[1].StartOffset, segments[1].EndOffset)
+	}
+}
+
+func TestGroupProcessedFilesSeparatesPar2FromPayload(t *testing.T) {
+	p := &NZBParser{}
+	allFiles := []contentResult{
+		{
+			file:           nzbparser.NzbFile{Number: 1, Filename: "TIesaj2er6vz6c3xW.part01.rar", Basefilename: "TIesaj2er6vz6c3xW"},
+			fileType:       storage.NZBFileTypeRar,
+			actualFilename: "TIesaj2er6vz6c3xW.part01.rar",
+		},
+		{
+			file:           nzbparser.NzbFile{Number: 2, Filename: "TIesaj2er6vz6c3xW.part02.rar", Basefilename: "TIesaj2er6vz6c3xW"},
+			fileType:       storage.NZBFileTypeRar,
+			actualFilename: "TIesaj2er6vz6c3xW.part02.rar",
+		},
+		{
+			file:           nzbparser.NzbFile{Number: 3, Filename: "TIesaj2er6vz6c3xW.vol001+01.par2", Basefilename: "TIesaj2er6vz6c3xW"},
+			fileType:       storage.NZBFileTypePar2,
+			actualFilename: "TIesaj2er6vz6c3xW.vol001+01.par2",
+		},
+		{
+			file:           nzbparser.NzbFile{Number: 4, Filename: "TIesaj2er6vz6c3xW.vol001+02.par2", Basefilename: "TIesaj2er6vz6c3xW"},
+			fileType:       storage.NZBFileTypePar2,
+			actualFilename: "TIesaj2er6vz6c3xW.vol001+02.par2",
+		},
+	}
+
+	groups := p.groupProcessedFiles(allFiles)
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups (1 rar + 2 par2), got %d", len(groups))
+	}
+
+	rarGroup, ok := groups["TIesaj2er6vz6c3xW"]
+	if !ok {
+		t.Fatalf("expected merged payload group keyed by base name")
+	}
+	if rarGroup.Type != storage.NZBFileTypeRar {
+		t.Fatalf("expected payload group type rar, got %s", rarGroup.Type)
+	}
+	if len(rarGroup.Files) != 2 {
+		t.Fatalf("expected 2 files in payload group, got %d", len(rarGroup.Files))
+	}
+
+	if _, ok := groups["par2::TIesaj2er6vz6c3xW.vol001+01.par2"]; !ok {
+		t.Fatalf("expected first par2 group to stay separate")
+	}
+	if _, ok := groups["par2::TIesaj2er6vz6c3xW.vol001+02.par2"]; !ok {
+		t.Fatalf("expected second par2 group to stay separate")
 	}
 }
 
