@@ -603,11 +603,34 @@ func (p *NZBParser) processFileGroups(ctx context.Context, groups map[string]*Fi
 	}
 	rarCounts, sevenZCounts, zipCounts, mediaCounts, deferredCounts := 0, 0, 0, 0, 0
 
-	// Process PAR2 groups first to build deobfuscation data
+	// Process PAR2 groups first to build deobfuscation data.
+	// Prefer the smallest candidate first because the main/index PAR2 usually
+	// has the fewest segments, while recovery volumes often contain no FileDesc packets.
+	par2Groups := make([]*FileGroup, 0)
 	for _, g := range groups {
 		if g.Type == storage.NZBFileTypePar2 && len(g.Files) > 0 {
-			p.logger.Debug().Str("group", g.BaseName).Msg("Processing PAR2 group for deobfuscation")
-			_, _ = p.processFileGroup(ctx, g, password)
+			par2Groups = append(par2Groups, g)
+		}
+	}
+	sort.SliceStable(par2Groups, func(i, j int) bool {
+		si := len(par2Groups[i].Files[0].Segments)
+		sj := len(par2Groups[j].Files[0].Segments)
+		if si != sj {
+			return si < sj
+		}
+		if par2Groups[i].ActualFilename != par2Groups[j].ActualFilename {
+			return par2Groups[i].ActualFilename < par2Groups[j].ActualFilename
+		}
+		return par2Groups[i].BaseName < par2Groups[j].BaseName
+	})
+	for _, g := range par2Groups {
+		p.logger.Debug().
+			Str("group", g.BaseName).
+			Int("segments", len(g.Files[0].Segments)).
+			Msg("Processing PAR2 group for deobfuscation")
+		_, _ = p.processFileGroup(ctx, g, password)
+		if len(p.par2Descs) > 0 {
+			break
 		}
 	}
 

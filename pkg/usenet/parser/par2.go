@@ -29,7 +29,7 @@ type Par2FileDesc struct {
 }
 
 var (
-	magic7z  = []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}
+	magic7z   = []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}
 	magicRar4 = []byte{0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00}
 	magicRar5 = []byte{0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00}
 	magicZip  = []byte{0x50, 0x4B, 0x03, 0x04}
@@ -129,7 +129,10 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 		return false, nil
 	}
 
+	matched := 0
 	renamed := 0
+	originalType := group.Type
+
 	for i := range group.Files {
 		if len(group.Files[i].Segments) == 0 {
 			continue
@@ -154,35 +157,35 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 
 		for _, fd := range descs {
 			if bytes.Equal(hash[:], fd.File16kHash[:]) {
-				p.logger.Debug().
-					Str("old_name", group.Files[i].Filename).
-					Str("new_name", fd.FileName).
-					Msg("PAR2 deobfuscation: renamed file")
-				group.Files[i].Filename = fd.FileName
-				renamed++
+				matched++
+				if group.Files[i].Filename != fd.FileName {
+					p.logger.Debug().
+						Str("old_name", group.Files[i].Filename).
+						Str("new_name", fd.FileName).
+						Msg("PAR2 deobfuscation: renamed file")
+					group.Files[i].Filename = fd.FileName
+					renamed++
+				}
 				break
 			}
 		}
 	}
 
-	if renamed == 0 {
-		return false, nil
-	}
-
-	p.logger.Info().Int("renamed", renamed).Msg("PAR2 deobfuscation renamed files")
-
 	firstOrig := ""
-	for _, f := range group.Files {
-		if f.Filename != "" {
-			firstOrig = f.Filename
-			break
+	if renamed > 0 {
+		p.logger.Info().Int("renamed", renamed).Msg("PAR2 deobfuscation renamed files")
+		for _, f := range group.Files {
+			if f.Filename != "" {
+				firstOrig = f.Filename
+				break
+			}
 		}
-	}
-	if firstOrig != "" {
-		group.ActualFilename = firstOrig
-		name := strings.TrimSuffix(firstOrig, filepath.Ext(firstOrig))
-		if name != "" {
-			group.BaseName = name
+		if firstOrig != "" {
+			group.ActualFilename = firstOrig
+			name := strings.TrimSuffix(firstOrig, filepath.Ext(firstOrig))
+			if name != "" {
+				group.BaseName = name
+			}
 		}
 	}
 
@@ -197,6 +200,13 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 				break
 			}
 		}
+	}
+
+	if renamed == 0 && group.Type == originalType {
+		if matched > 0 {
+			p.logger.Debug().Int("matched", matched).Msg("PAR2 deobfuscation matched files but filenames were already unchanged")
+		}
+		return false, nil
 	}
 
 	return true, nil
