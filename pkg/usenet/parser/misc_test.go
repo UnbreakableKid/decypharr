@@ -210,3 +210,29 @@ func TestBuildBaseSegmentsUsesPerFileMetadata(t *testing.T) {
 		t.Fatalf("expected second volume size 150, got %d", volumeInfos[1].Size)
 	}
 }
+
+func TestRenameMediaFilesFallbackForObfuscatedMultiFilenamesWithoutDot(t *testing.T) {
+	files := []storage.NZBFile{
+		{Name: "c3f6eb331a881d4ff86c5bc9d4a89a7ab33350fb430d048ac49941f953539085.mkv", FileType: storage.NZBFileTypeMedia, Number: 1},
+		{Name: "6ed5b27559719717d2c871f552b1614cb9d4a0f3a17e3ddf71d29882d3425355.mkv", FileType: storage.NZBFileTypeMedia, Number: 2},
+	}
+
+	renameMediaFiles(files, config.DeobfuscateModeSeasonEp, "JoJos.Bizarre.Adventure.S05.1080p.NF.WEB-DL.DDP2.0.H.264-Kitsune-xpost", zerolog.Nop())
+
+	if files[0].Name != "S05E01.mkv" || files[1].Name != "S05E02.mkv" {
+		t.Fatalf("expected fallback names for multi-file obfuscated names without dot, got %q and %q", files[0].Name, files[1].Name)
+	}
+}
+
+func TestRenameMediaFilesFallbackForUUIDFilenames(t *testing.T) {
+	files := []storage.NZBFile{
+		{Name: "54da80d8-3e96-452e-b2e1-5e8740ea84d4.mkv", FileType: storage.NZBFileTypeMedia, Number: 1},
+		{Name: "2b9e6005-728b-4a57-8147-36cb927f8a92.mkv", FileType: storage.NZBFileTypeMedia, Number: 2},
+	}
+
+	renameMediaFiles(files, config.DeobfuscateModeSeasonEp, "Some.Show.S01.1080p", zerolog.Nop())
+
+	if files[0].Name != "S01E01.mkv" || files[1].Name != "S01E02.mkv" {
+		t.Fatalf("expected fallback names for UUID files, got %q and %q", files[0].Name, files[1].Name)
+	}
+}

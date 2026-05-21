@@ -229,6 +229,9 @@ func looksObfuscatedName(name string) bool {
 	if obfuscatedHexSuffix.MatchString(base) {
 		return true
 	}
+	if _, err := uuid.Parse(base); err == nil {
+		return true
+	}
 	if strings.ContainsAny(base, ".-_ []()") {
 		return false
 	}
@@ -315,15 +318,24 @@ func renameMediaFiles(files []storage.NZBFile, mode config.DeobfuscateMode, nzbN
 		return
 	}
 	if len(mediaFiles) > 1 && !looksObfuscated(mediaFiles) {
-		unique := make(map[string]struct{}, len(mediaFiles))
+		hasObfuscated := false
 		for _, mf := range mediaFiles {
-			unique[mf.Name] = struct{}{}
-		}
-		if len(unique) == len(mediaFiles) {
-			for _, mf := range mediaFiles {
-				logMediaNameDecision(logger, "kept_discovered", "multi_unique_non_obfuscated_names", mf.Name, mf.Name)
+			if looksObfuscatedName(mf.Name) {
+				hasObfuscated = true
+				break
 			}
-			return
+		}
+		if !hasObfuscated {
+			unique := make(map[string]struct{}, len(mediaFiles))
+			for _, mf := range mediaFiles {
+				unique[mf.Name] = struct{}{}
+			}
+			if len(unique) == len(mediaFiles) {
+				for _, mf := range mediaFiles {
+					logMediaNameDecision(logger, "kept_discovered", "multi_unique_non_obfuscated_names", mf.Name, mf.Name)
+				}
+				return
+			}
 		}
 	}
 
