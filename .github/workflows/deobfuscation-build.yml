@@ -5,6 +5,7 @@ on:
     branches:
       - feat/usenet-deobfuscation
       - feat/usenet-squashed
+      - feat/usenet-deobfuscation-fixes
 
 permissions:
   contents: read

@@ -784,6 +784,90 @@ func (p *NZBParser) processFileGroups(ctx context.Context, groups map[string]*Fi
 		}
 	}
 
+	// Gather all non-PAR2 groups
+	nonPar2Groups := make([]*FileGroup, 0)
+	for _, g := range groups {
+		if len(g.Files) > 0 && g.Type != storage.NZBFileTypePar2 {
+			nonPar2Groups = append(nonPar2Groups, g)
+		}
+	}
+
+	// Perform global deobfuscation if we have PAR2 descriptions and detect obfuscated names
+	if len(p.par2Descs) > 0 {
+		hasObfuscated := false
+		for _, g := range nonPar2Groups {
+			for _, f := range g.Files {
+				if looksObfuscatedName(f.Filename) {
+					hasObfuscated = true
+					break
+				}
+			}
+			if hasObfuscated {
+				break
+			}
+		}
+
+		if hasObfuscated {
+			p.logger.Info().Msg("Obfuscated filenames detected, starting global PAR2 deobfuscation pass")
+
+			workers := min(len(nonPar2Groups), p.maxConcurrent)
+			mapper := iter.Mapper[*FileGroup, bool]{
+				MaxGoroutines: workers,
+			}
+
+			_ = mapper.Map(nonPar2Groups, func(g **FileGroup) bool {
+				if err := p.enrichGroupWithFileInfo(ctx, *g); err != nil {
+					p.logger.Debug().Err(err).Str("group", (*g).BaseName).Msg("Failed to enrich group info before deobfuscation")
+					return false
+				}
+				renamed, err := p.deobfuscateGroupWithPar2(ctx, *g, p.par2Descs)
+				if err != nil {
+					p.logger.Debug().Err(err).Str("group", (*g).BaseName).Msg("PAR2 deobfuscation failed for group")
+					return false
+				}
+				return renamed
+			})
+
+			// Re-group the deobfuscated files globally
+			var results []contentResult
+			for _, g := range nonPar2Groups {
+				for _, f := range g.Files {
+					fileType := p.detectFileType(f.Filename)
+
+					var fileSize, segmentSize, partNumber, partBegin int64
+					metaKey := fileMetaKey(f)
+					if g.fileMeta != nil {
+						if meta, ok := g.fileMeta[metaKey]; ok {
+							fileSize = meta.fileSize
+							segmentSize = meta.segmentSize
+							partNumber = meta.partNumber
+							partBegin = meta.partBegin
+						}
+					}
+
+					results = append(results, contentResult{
+						file:           f,
+						fileType:       fileType,
+						actualFilename: f.Filename,
+						fileSize:       fileSize,
+						segmentSize:    segmentSize,
+						partNumber:     partNumber,
+						partBegin:      partBegin,
+					})
+				}
+			}
+
+			newGroups := p.groupProcessedFiles(results)
+			newGroups = p.mergeObfuscatedRarGroups(newGroups)
+
+			// Mark par2Attempted = true on the new groups to prevent redundant attempts
+			for _, g := range newGroups {
+				g.par2Attempted = true
+			}
+			groups = newGroups
+		}
+	}
+
 	// Convert map into slice of *values*, not pointers
 	fileGroups := make([]FileGroup, 0, len(groups))
 	for _, g := range groups {
@@ -917,6 +1001,24 @@ func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, pass
 
 func (p *NZBParser) enrichGroupWithFileInfo(ctx context.Context, group *FileGroup) error {
 	if len(group.Files) == 0 {
+		return nil
+	}
+
+	if len(group.fileMeta) == len(group.Files) {
+		if group.metadata == nil {
+			firstMetaKey := fileMetaKey(group.Files[0])
+			firstMeta := group.fileMeta[firstMetaKey]
+			lastMetaKey := fileMetaKey(group.Files[len(group.Files)-1])
+			lastMeta, hasLast := group.fileMeta[lastMetaKey]
+			if !hasLast {
+				lastMeta = firstMeta
+			}
+			group.metadata = &fileAnalysisResult{
+				fileSize:     firstMeta.fileSize,
+				lastFileSize: lastMeta.fileSize,
+				segmentSize:  firstMeta.segmentSize,
+			}
+		}
 		return nil
 	}
 

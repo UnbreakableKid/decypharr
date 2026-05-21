@@ -7,8 +7,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/Tensai75/nzbparser"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -39,15 +41,16 @@ var (
 func parsePar2FileDesc(data []byte) []Par2FileDesc {
 	var descs []Par2FileDesc
 	offset := 0
+	magicBytes := []byte(par2Magic)
+	descTypeBytes := []byte(par2FileDescType)
 
 	for offset < len(data) {
-		if offset+8 > len(data) {
+		idx := bytes.Index(data[offset:], magicBytes)
+		if idx < 0 {
 			break
 		}
-		if string(data[offset:offset+8]) != par2Magic {
-			offset++
-			continue
-		}
+		offset += idx
+
 		if offset+16 > len(data) {
 			break
 		}
@@ -61,11 +64,14 @@ func parsePar2FileDesc(data []byte) []Par2FileDesc {
 		if offset+64 > len(data) {
 			break
 		}
-		packetType := string(data[offset+48 : offset+64])
-		if packetType == par2FileDescType {
+		packetType := data[offset+48 : offset+64]
+		if bytes.Equal(packetType, descTypeBytes) {
 			body := data[offset+64 : offset+packetLen]
 			if len(body) < 56 {
 				offset += packetLen
+				if packetLen == 0 {
+					break
+				}
 				continue
 			}
 			var fd Par2FileDesc
@@ -138,10 +144,28 @@ func (p *NZBParser) deobfuscateGroupWithPar2(ctx context.Context, group *FileGro
 			continue
 		}
 
+		// Find the segment representing the first 16KB of the file (usually segment 1)
+		var targetSegment nzbparser.NzbSegment
+		found := false
+		for _, seg := range group.Files[i].Segments {
+			if seg.Number == 1 {
+				targetSegment = seg
+				found = true
+				break
+			}
+		}
+		if !found {
+			// Fallback: sort to find the lowest segment number
+			sort.Slice(group.Files[i].Segments, func(k, l int) bool {
+				return group.Files[i].Segments[k].Number < group.Files[i].Segments[l].Number
+			})
+			targetSegment = group.Files[i].Segments[0]
+		}
+
 		var data *nntp.YencMetadata
 		err := p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
 			var e error
-			data, e = conn.GetHeaderPrefix(group.Files[i].Segments[0].Id, par2BlockSize)
+			data, e = conn.GetHeaderPrefix(targetSegment.Id, par2BlockSize)
 			return e
 		})
 		if err != nil || data == nil || len(data.Snippet) == 0 {
