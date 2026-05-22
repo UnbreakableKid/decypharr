@@ -117,9 +117,11 @@ var (
 	rarMainPattern       = regexp.MustCompile(`\.rar$`)
 	rarPartPattern       = regexp.MustCompile(`\.r\d{2}$`) // .r00, .r01, etc.
 	rarVolumePattern     = regexp.MustCompile(`\.part\d+\.rar$`)
-	ignoreExtensions     = []string{".sfv", ".nfo", ".jpg", ".png", ".txt", ".srt", ".idx", ".sub"}
+	ignoreExtensions     = []string{".sfv", ".nfo", ".jpg", ".png", ".txt", ".srt", ".idx", ".sub", ".srr", ".srs", ".rev", ".par", ".nzb", ".url", ".desktop", ".website", ".gif", ".jpeg", ".bmp", ".tiff", ".webp"}
 	sevenZMainPattern    = regexp.MustCompile(`\.7z$`)
 	sevenZPartPattern    = regexp.MustCompile(`\.7z\.\d{3}$`)
+	zipPartPattern       = regexp.MustCompile(`\.z\d+$`)
+	zipPartNumericPattern = regexp.MustCompile(`\.zip\.\d+$`)
 	extWithNumberPattern = regexp.MustCompile(`\.[^ "\.]*\.\d+$`)
 	volPar2Pattern       = regexp.MustCompile(`(?i)\.vol\d+\+\d+\.par2?$`)
 	partPattern          = regexp.MustCompile(`(?i)\.part\d+\.[^ "\.]*$`)
@@ -739,11 +741,11 @@ func (p *NZBParser) detectFileType(filename string) storage.NZBFileType {
 		return storage.NZBFileTypeSevenZip
 	}
 
-	if strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar") ||
-		strings.HasSuffix(lower, ".gz") || strings.HasSuffix(lower, ".bz2") {
-		if strings.HasSuffix(lower, ".zip") {
-			return storage.NZBFileTypeZip
-		}
+	if strings.HasSuffix(lower, ".zip") || zipPartPattern.MatchString(lower) || zipPartNumericPattern.MatchString(lower) {
+		return storage.NZBFileTypeZip
+	}
+
+	if strings.HasSuffix(lower, ".tar") || strings.HasSuffix(lower, ".gz") || strings.HasSuffix(lower, ".bz2") {
 		return storage.NZBFileTypeUnknown
 	}
 

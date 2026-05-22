@@ -400,13 +400,18 @@ func buildExtractedArchiveFiles(
 			copy(segments, baseSegments)
 		}
 
+		fileTypeToUse := fileType
+		if utils.IsMediaFile(name) {
+			fileTypeToUse = storage.NZBFileTypeMedia
+		}
+
 		files = append(files, &storage.NZBFile{
 			Name:         name,
 			InternalPath: info.InternalPath,
 			Groups:       getGroupsList(group.Groups),
 			Segments:     segments,
 			Password:     password,
-			FileType:     fileType,
+			FileType:     fileTypeToUse,
 			Number:       group.Files[0].Number,
 			Size:         info.FileSize,
 			IsStored:     info.IsStored,

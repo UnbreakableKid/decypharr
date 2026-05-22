@@ -214,13 +214,18 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 			size = streamSize
 		}
 
+		fileType := storage.NZBFileTypeRar
+		if utils.IsMediaFile(name) {
+			fileType = storage.NZBFileTypeMedia
+		}
+
 		file := &storage.NZBFile{
 			Name:          name,
 			InternalPath:  rarFile.Name,
 			Groups:        getGroupsList(group.Groups),
 			Segments:      fileSegments, // Direct segment list with offsets!
 			Password:      password,
-			FileType:      storage.NZBFileTypeRar,
+			FileType:      fileType,
 			Number:        group.Files[0].Number,
 			Size:          size,
 			IsStored:      rarFile.IsStored,

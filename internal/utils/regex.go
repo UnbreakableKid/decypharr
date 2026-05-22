@@ -16,10 +16,16 @@ var mediaExtensions = map[string]struct{}{
 	"avc": {}, "vp3": {}, "svq3": {}, "nuv": {}, "viv": {}, "dv": {},
 	"fli": {}, "flv": {}, "wpl": {}, "vob": {}, "mkv": {}, "mk3d": {},
 	"ts": {}, "wtv": {}, "m2ts": {},
+	"mts": {}, "m2t": {}, "tp": {}, "trp": {}, "f4v": {}, "hevc": {},
+	"h264": {}, "264": {}, "x264": {}, "h265": {}, "265": {}, "x265": {},
+	"ssif": {}, "3g2": {},
 	// Audio
 	"mp2": {}, "mp3": {}, "m4a": {}, "m4b": {}, "m4p": {}, "ogg": {},
 	"oga": {}, "opus": {}, "wma": {}, "wav": {}, "wv": {}, "flac": {},
 	"ape": {}, "aif": {}, "aiff": {}, "aifc": {},
+	"ac3": {}, "dts": {}, "dtshd": {}, "eac3": {}, "thd": {}, "truehd": {},
+	"aac": {}, "mka": {}, "dsf": {}, "dff": {}, "mp1": {}, "mpga": {},
+	"mpa": {},
 }
 
 func RemoveInvalidChars(value string) string {

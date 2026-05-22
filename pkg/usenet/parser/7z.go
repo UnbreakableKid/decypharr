@@ -131,6 +131,11 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 			copy(segments, baseSegments)
 		}
 
+		fileType := storage.NZBFileTypeSevenZip
+		if utils.IsMediaFile(name) {
+			fileType = storage.NZBFileTypeMedia
+		}
+
 		files = append(files, &storage.NZBFile{
 			Name:         name,
 			InternalPath: internal,
@@ -140,7 +145,7 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 			Segments:     segments,
 			Password:     password,
 			Number:       group.Files[0].Number,
-			FileType:     storage.NZBFileTypeSevenZip,
+			FileType:     fileType,
 		})
 	}
 
@@ -308,6 +313,11 @@ func (p *SevenZParser) processRARFilesFromPositions(
 			Int64("file_size", rarEntry.UncompressedSize).
 			Msg("Built segments for RAR file in 7z")
 
+		fileType := storage.NZBFileTypeRar
+		if utils.IsMediaFile(filename) {
+			fileType = storage.NZBFileTypeMedia
+		}
+
 		files = append(files, &storage.NZBFile{
 			Name:         filename,
 			InternalPath: rarEntry.Name,
@@ -317,7 +327,7 @@ func (p *SevenZParser) processRARFilesFromPositions(
 			Groups:       getGroupsList(group.Groups),
 			Password:     password,
 			Number:       group.Files[0].Number,
-			FileType:     storage.NZBFileTypeRar,
+			FileType:     fileType,
 		})
 	}
 
