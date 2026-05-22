@@ -1020,27 +1020,25 @@ class ConfigManager {
                         </div>
 
                         <div class="usenet-sample-fields hidden">
-                            <label class="label" for="arr[${index}].sample_action">
-                                <span class=" font-medium">Usenet Sample Action</span>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" class="checkbox checkbox-sm checkbox-primary"
+                                       name="arr[${index}].mark_as_failed_sample" id="arr[${index}].mark_as_failed_sample">
+                                <div>
+                                    <span class="text-sm">Mark Usenet Samples as Failed</span>
+                                    <div class="label-text-alt text-xs opacity-70">Mark entry as failed if it is a sample (Usenet only)</div>
+                                </div>
                             </label>
-                            <select class="select w-full" name="arr[${index}].sample_action" id="arr[${index}].sample_action">
-                                <option value="">Do Nothing</option>
-                                <option value="fail">Mark as Failed</option>
-                                <option value="fail_blocklist">Mark as Failed and Blocklist</option>
-                            </select>
-                            <span class="text-sm opacity-70">Action to take when entry is a sample (Usenet only)</span>
                         </div>
 
                         <div class="usenet-sample-fields hidden">
-                            <label class="label" for="arr[${index}].unable_to_determine_action">
-                                <span class=" font-medium">Usenet Unable to Determine Action</span>
+                            <label class="label cursor-pointer justify-start gap-2">
+                                <input type="checkbox" class="checkbox checkbox-sm checkbox-primary"
+                                       name="arr[${index}].mark_as_failed_unable_to_determine" id="arr[${index}].mark_as_failed_unable_to_determine">
+                                <div>
+                                    <span class="text-sm">Mark Undetermined as Failed</span>
+                                    <div class="label-text-alt text-xs opacity-70">Mark entry as failed if unable to verify if sample (Usenet only)</div>
+                                </div>
                             </label>
-                            <select class="select w-full" name="arr[${index}].unable_to_determine_action" id="arr[${index}].unable_to_determine_action">
-                                <option value="">Do Nothing</option>
-                                <option value="fail">Mark as Failed</option>
-                                <option value="fail_blocklist">Mark as Failed and Blocklist</option>
-                            </select>
-                            <span class="text-sm opacity-70">Action to take when unable to verify if sample (Usenet only)</span>
                         </div>
                     </div>
 
@@ -1356,10 +1354,10 @@ class ConfigManager {
             const downloadUncachedInput = getField('download_uncached');
             const selectedDebridInput = getField('selected_debrid');
             const sourceInput = getField('source');
-            const sampleActionInput = getField('sample_action');
-            const unableToDetermineActionInput = getField('unable_to_determine_action');
+            const markAsFailedSampleInput = getField('mark_as_failed_sample');
+            const markAsFailedUnableToDetermineInput = getField('mark_as_failed_unable_to_determine');
 
-            if (!nameInput || !hostInput || !tokenInput || !cleanupInput || !skipRepairInput || !downloadUncachedInput || !selectedDebridInput || !sourceInput || !sampleActionInput || !unableToDetermineActionInput) {
+            if (!nameInput || !hostInput || !tokenInput || !cleanupInput || !skipRepairInput || !downloadUncachedInput || !selectedDebridInput || !sourceInput || !markAsFailedSampleInput || !markAsFailedUnableToDetermineInput) {
                 return;
             }
 
@@ -1372,8 +1370,8 @@ class ConfigManager {
                 download_uncached: downloadUncachedInput.checked,
                 selected_debrid: selectedDebridInput.value,
                 source: sourceInput.value,
-                sample_action: sampleActionInput.value,
-                unable_to_determine_action: unableToDetermineActionInput.value
+                mark_as_failed_sample: markAsFailedSampleInput.checked,
+                mark_as_failed_unable_to_determine: markAsFailedUnableToDetermineInput.checked
             };
 
             if (arr.name && arr.host) {

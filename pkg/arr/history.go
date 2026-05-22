@@ -212,9 +212,6 @@ func (a *Arr) CleanupQueue() error {
 	}
 	queue := a.GetQueue()
 
-	var deleteRemove []int
-	var deleteRemoveAndSearch []int
-	var deleteRemoveAndBlocklist []int
 	var deleteRemoveAndBlocklistAndSearch []int
 
 	manualImports := make(map[string]bool)
@@ -222,43 +219,23 @@ func (a *Arr) CleanupQueue() error {
 	for _, q := range queue {
 		// Check for Usenet sample warning first if sample action is configured
 		sampleState := a.getUsenetSampleState(q)
-		var action string
+		var markAsFailed bool
 		if sampleState == UsenetSampleIdentified {
-			action = a.SampleAction
+			markAsFailed = a.MarkAsFailedSample
 		} else if sampleState == UsenetSampleUnableToDetermine {
-			action = a.UnableToDetermineAction
+			markAsFailed = a.MarkAsFailedUnableToDetermine
 		}
 
-		if action != "" && action != "do_nothing" && action != "none" {
+		if markAsFailed {
 			var stateStr string
 			switch sampleState {
 			case UsenetSampleIdentified:
 				stateStr = "Identified Sample"
 			case UsenetSampleUnableToDetermine:
 				stateStr = "Unable to Determine if Sample"
-			default:
-				stateStr = "None"
 			}
-			var actionFriendlyStr string
-			switch action {
-			case "fail":
-				actionFriendlyStr = "Mark as Failed"
-			case "fail_blocklist":
-				actionFriendlyStr = "Mark as Failed and Blocklist"
-			default:
-				actionFriendlyStr = action
-			}
-			a.logger.Info().Msgf("Queue item %d (%s) is classified as: %s. Executing action: %s", q.Id, q.Title, stateStr, actionFriendlyStr)
-			switch action {
-			case "remove":
-				deleteRemove = append(deleteRemove, q.Id)
-			case "remove_and_search", "fail":
-				deleteRemoveAndSearch = append(deleteRemoveAndSearch, q.Id)
-			case "remove_and_blocklist":
-				deleteRemoveAndBlocklist = append(deleteRemoveAndBlocklist, q.Id)
-			case "remove_and_blocklist_and_search", "remove_and_blacklist_and_search", "fail_blocklist":
-				deleteRemoveAndBlocklistAndSearch = append(deleteRemoveAndBlocklistAndSearch, q.Id)
-			}
+			a.logger.Info().Msgf("Queue item %d (%s) is classified as: %s. Executing action: Mark as Failed", q.Id, q.Title, stateStr)
+			deleteRemoveAndBlocklistAndSearch = append(deleteRemoveAndBlocklistAndSearch, q.Id)
 			continue // Skip standard queue filters for samples
 		}
 
@@ -271,36 +248,12 @@ func (a *Arr) CleanupQueue() error {
 		}
 	}
 
-	if len(deleteRemove) > 0 {
-		a.logger.Debug().Msgf("Bulk removing %d sample queue items from client", len(deleteRemove))
-		if err := a.DeleteBulk(deleteRemove, true, false, true); err != nil {
-			a.logger.Error().Err(err).Msg("Error removing sample queue items")
-		} else {
-			a.logger.Info().Msgf("Successfully removed %d sample queue items from client", len(deleteRemove))
-		}
-	}
-	if len(deleteRemoveAndSearch) > 0 {
-		a.logger.Debug().Msgf("Bulk marking %d sample queue items as failed", len(deleteRemoveAndSearch))
-		if err := a.DeleteBulk(deleteRemoveAndSearch, true, false, false); err != nil {
-			a.logger.Error().Err(err).Msg("Error marking sample queue items as failed")
-		} else {
-			a.logger.Info().Msgf("Successfully marked %d sample queue items as failed (triggers Arr re-search)", len(deleteRemoveAndSearch))
-		}
-	}
-	if len(deleteRemoveAndBlocklist) > 0 {
-		a.logger.Debug().Msgf("Bulk removing and blocklisting %d sample queue items", len(deleteRemoveAndBlocklist))
-		if err := a.DeleteBulk(deleteRemoveAndBlocklist, true, true, true); err != nil {
-			a.logger.Error().Err(err).Msg("Error removing and blocklisting sample queue items")
-		} else {
-			a.logger.Info().Msgf("Successfully removed and blocklisted %d sample queue items", len(deleteRemoveAndBlocklist))
-		}
-	}
 	if len(deleteRemoveAndBlocklistAndSearch) > 0 {
-		a.logger.Debug().Msgf("Bulk marking %d sample queue items as failed and blocklisted", len(deleteRemoveAndBlocklistAndSearch))
+		a.logger.Debug().Msgf("Bulk marking %d queue items as failed and blocklisted", len(deleteRemoveAndBlocklistAndSearch))
 		if err := a.DeleteBulk(deleteRemoveAndBlocklistAndSearch, true, true, false); err != nil {
-			a.logger.Error().Err(err).Msg("Error marking sample queue items as failed and blocklisted")
+			a.logger.Error().Err(err).Msg("Error marking queue items as failed and blocklisted")
 		} else {
-			a.logger.Info().Msgf("Successfully marked %d sample queue items as failed and blocklisted (triggers Arr re-search)", len(deleteRemoveAndBlocklistAndSearch))
+			a.logger.Info().Msgf("Successfully marked %d queue items as failed and blocklisted (triggers Arr re-search)", len(deleteRemoveAndBlocklistAndSearch))
 		}
 	}
 
