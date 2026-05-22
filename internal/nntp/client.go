@@ -23,7 +23,6 @@ import (
 	"github.com/sirrobot01/decypharr/internal/retry"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sourcegraph/conc/pool"
-	"golang.org/x/sys/unix"
 )
 
 // ProviderPool manages connections for a single provider using a LIFO stack
@@ -679,12 +678,7 @@ func (c *Client) socketControl() func(network, address string, rc syscall.RawCon
 	}
 	return func(_, _ string, rc syscall.RawConn) error {
 		return rc.Control(func(fd uintptr) {
-			if rb > 0 {
-				_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, rb)
-			}
-			if wb > 0 {
-				_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUF, wb)
-			}
+			_ = setSocketBuffers(fd, rb, wb)
 		})
 	}
 }
