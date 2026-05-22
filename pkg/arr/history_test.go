@@ -178,11 +178,11 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Test 1: sample_action = "remove_and_search", unable_to_determine_action = "remove_and_search"
+	// Test 1: sample_action = "fail", unable_to_determine_action = "fail"
 	bulkDeletedCount = 0
 	a := New("sonarr", server.URL, "dummy-token", true, false, nil, "", "manual")
-	a.SampleAction = "remove_and_search"
-	a.UnableToDetermineAction = "remove_and_search"
+	a.SampleAction = "fail"
+	a.UnableToDetermineAction = "fail"
 
 	err := a.CleanupQueue()
 	if err != nil {
@@ -200,9 +200,9 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 		t.Errorf("expected IDs [101, 102], got %v", bulkDeletedPayload.Ids)
 	}
 
-	// Test 2: sample_action = "remove_and_search", unable_to_determine_action = ""
+	// Test 2: sample_action = "fail", unable_to_determine_action = ""
 	bulkDeletedCount = 0
-	a.SampleAction = "remove_and_search"
+	a.SampleAction = "fail"
 	a.UnableToDetermineAction = ""
 	err = a.CleanupQueue()
 	if err != nil {
@@ -216,10 +216,10 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 		t.Errorf("expected IDs [102], got %v", bulkDeletedPayload.Ids)
 	}
 
-	// Test 3: sample_action = "", unable_to_determine_action = "remove_and_search"
+	// Test 3: sample_action = "", unable_to_determine_action = "fail"
 	bulkDeletedCount = 0
 	a.SampleAction = ""
-	a.UnableToDetermineAction = "remove_and_search"
+	a.UnableToDetermineAction = "fail"
 	err = a.CleanupQueue()
 	if err != nil {
 		t.Fatalf("CleanupQueue failed: %v", err)
@@ -232,10 +232,10 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 		t.Errorf("expected IDs [101], got %v", bulkDeletedPayload.Ids)
 	}
 
-	// Test 4: sample_action = "remove_and_blacklist_and_search", unable_to_determine_action = "remove_and_blacklist_and_search"
+	// Test 4: sample_action = "fail_blocklist", unable_to_determine_action = "fail_blocklist"
 	bulkDeletedCount = 0
-	a.SampleAction = "remove_and_blacklist_and_search"
-	a.UnableToDetermineAction = "remove_and_blacklist_and_search"
+	a.SampleAction = "fail_blocklist"
+	a.UnableToDetermineAction = "fail_blocklist"
 	err = a.CleanupQueue()
 	if err != nil {
 		t.Fatalf("CleanupQueue failed: %v", err)
@@ -244,6 +244,6 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 		t.Errorf("expected 1 bulk delete call, got %d", bulkDeletedCount)
 	}
 	if queryParams.RemoveFromClient != "true" || queryParams.Blocklist != "true" || queryParams.SkipRedownload != "false" {
-		t.Errorf("unexpected query params for blacklist and search: %+v", queryParams)
+		t.Errorf("unexpected query params for fail and blocklist: %+v", queryParams)
 	}
 }

@@ -234,11 +234,11 @@ func (a *Arr) CleanupQueue() error {
 			switch action {
 			case "remove":
 				deleteRemove = append(deleteRemove, q.Id)
-			case "remove_and_search":
+			case "remove_and_search", "fail":
 				deleteRemoveAndSearch = append(deleteRemoveAndSearch, q.Id)
 			case "remove_and_blocklist":
 				deleteRemoveAndBlocklist = append(deleteRemoveAndBlocklist, q.Id)
-			case "remove_and_blocklist_and_search", "remove_and_blacklist_and_search":
+			case "remove_and_blocklist_and_search", "remove_and_blacklist_and_search", "fail_blocklist":
 				deleteRemoveAndBlocklistAndSearch = append(deleteRemoveAndBlocklistAndSearch, q.Id)
 			}
 			continue // Skip standard queue filters for samples

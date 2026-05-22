@@ -29,6 +29,7 @@ class ConfigManager {
         this.loadConfiguration();
         this.setupMagnetHandler();
         this.checkIncompleteConfig();
+        this.setupUsenetObserver();
     }
 
     checkIncompleteConfig() {
@@ -101,6 +102,9 @@ class ConfigManager {
 
         // Load repair config
         this.populateRepairSettings(config.repair, config.arrs);
+
+        // Update Usenet dropdowns visibility after populate
+        this.updateUsenetSampleDropdownsVisibility();
     }
 
     populateRepairSettings(repair, arrs) {
@@ -928,6 +932,7 @@ class ConfigManager {
         }
 
         this.arrCount++;
+        this.updateUsenetSampleDropdownsVisibility();
     }
 
     populateArrData(index, data) {
@@ -1014,26 +1019,26 @@ class ConfigManager {
                             <span class="text-sm opacity-70">Which debrid service this Arr should prefer</span>
                         </div>
 
-                        <div>
+                        <div class="usenet-sample-fields hidden">
                             <label class="label" for="arr[${index}].sample_action">
                                 <span class=" font-medium">Usenet Sample Action</span>
                             </label>
                             <select class="select w-full" name="arr[${index}].sample_action" id="arr[${index}].sample_action">
                                 <option value="">Do Nothing</option>
-                                <option value="remove_and_search">Remove and Search</option>
-                                <option value="remove_and_blacklist_and_search">Remove and Blocklist and Search</option>
+                                <option value="fail">Mark as Failed</option>
+                                <option value="fail_blocklist">Mark as Failed and Blocklist</option>
                             </select>
                             <span class="text-sm opacity-70">Action to take when entry is a sample (Usenet only)</span>
                         </div>
 
-                        <div>
+                        <div class="usenet-sample-fields hidden">
                             <label class="label" for="arr[${index}].unable_to_determine_action">
                                 <span class=" font-medium">Usenet Unable to Determine Action</span>
                             </label>
                             <select class="select w-full" name="arr[${index}].unable_to_determine_action" id="arr[${index}].unable_to_determine_action">
                                 <option value="">Do Nothing</option>
-                                <option value="remove_and_search">Remove and Search</option>
-                                <option value="remove_and_blacklist_and_search">Remove and Blocklist and Search</option>
+                                <option value="fail">Mark as Failed</option>
+                                <option value="fail_blocklist">Mark as Failed and Blocklist</option>
                             </select>
                             <span class="text-sm opacity-70">Action to take when unable to verify if sample (Usenet only)</span>
                         </div>
@@ -1845,5 +1850,30 @@ class ConfigManager {
             </div>
         </div>
         `;
+    }
+
+    setupUsenetObserver() {
+        if (!this.refs.usenetProviders) return;
+        this.usenetObserver = new MutationObserver(() => {
+            this.updateUsenetSampleDropdownsVisibility();
+        });
+        this.usenetObserver.observe(this.refs.usenetProviders, { childList: true });
+    }
+
+    updateUsenetSampleDropdownsVisibility() {
+        const providers = this.refs.usenetProviders ? this.refs.usenetProviders.querySelectorAll('.usenet-provider') : [];
+        const hasUsenet = providers.length > 0;
+        const fields = document.querySelectorAll('.usenet-sample-fields');
+        fields.forEach(field => {
+            if (hasUsenet) {
+                field.classList.remove('hidden');
+            } else {
+                field.classList.add('hidden');
+                const select = field.querySelector('select');
+                if (select) {
+                    select.value = "";
+                }
+            }
+        });
     }
 }
