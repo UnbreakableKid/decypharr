@@ -178,10 +178,11 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Test 1: sample_action = "remove_and_search"
+	// Test 1: sample_action = "remove_and_search", unable_to_determine_action = "remove_and_search"
 	bulkDeletedCount = 0
 	a := New("sonarr", server.URL, "dummy-token", true, false, nil, "", "manual")
 	a.SampleAction = "remove_and_search"
+	a.UnableToDetermineAction = "remove_and_search"
 
 	err := a.CleanupQueue()
 	if err != nil {
@@ -194,14 +195,47 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 	if queryParams.RemoveFromClient != "true" || queryParams.Blocklist != "false" || queryParams.SkipRedownload != "false" {
 		t.Errorf("unexpected query params: %+v", queryParams)
 	}
-	// We expect 101 and 102 to be deleted. 103 is torrent, so it's ignored (or filtered by normal queueFilter as None).
+	// We expect 101 and 102 to be deleted. 103 is torrent, so it's ignored.
 	if len(bulkDeletedPayload.Ids) != 2 || bulkDeletedPayload.Ids[0] != 101 || bulkDeletedPayload.Ids[1] != 102 {
 		t.Errorf("expected IDs [101, 102], got %v", bulkDeletedPayload.Ids)
 	}
 
-	// Test 2: sample_action = "remove_and_blacklist_and_search"
+	// Test 2: sample_action = "remove_and_search", unable_to_determine_action = ""
+	bulkDeletedCount = 0
+	a.SampleAction = "remove_and_search"
+	a.UnableToDetermineAction = ""
+	err = a.CleanupQueue()
+	if err != nil {
+		t.Fatalf("CleanupQueue failed: %v", err)
+	}
+	if bulkDeletedCount != 1 {
+		t.Errorf("expected 1 bulk delete call, got %d", bulkDeletedCount)
+	}
+	// We expect only 102 to be deleted.
+	if len(bulkDeletedPayload.Ids) != 1 || bulkDeletedPayload.Ids[0] != 102 {
+		t.Errorf("expected IDs [102], got %v", bulkDeletedPayload.Ids)
+	}
+
+	// Test 3: sample_action = "", unable_to_determine_action = "remove_and_search"
+	bulkDeletedCount = 0
+	a.SampleAction = ""
+	a.UnableToDetermineAction = "remove_and_search"
+	err = a.CleanupQueue()
+	if err != nil {
+		t.Fatalf("CleanupQueue failed: %v", err)
+	}
+	if bulkDeletedCount != 1 {
+		t.Errorf("expected 1 bulk delete call, got %d", bulkDeletedCount)
+	}
+	// We expect only 101 to be deleted.
+	if len(bulkDeletedPayload.Ids) != 1 || bulkDeletedPayload.Ids[0] != 101 {
+		t.Errorf("expected IDs [101], got %v", bulkDeletedPayload.Ids)
+	}
+
+	// Test 4: sample_action = "remove_and_blacklist_and_search", unable_to_determine_action = "remove_and_blacklist_and_search"
 	bulkDeletedCount = 0
 	a.SampleAction = "remove_and_blacklist_and_search"
+	a.UnableToDetermineAction = "remove_and_blacklist_and_search"
 	err = a.CleanupQueue()
 	if err != nil {
 		t.Fatalf("CleanupQueue failed: %v", err)

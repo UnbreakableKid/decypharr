@@ -1025,9 +1025,21 @@ class ConfigManager {
                             </select>
                             <span class="text-sm opacity-70">Action to take when entry is a sample (Usenet only)</span>
                         </div>
+
+                        <div>
+                            <label class="label" for="arr[${index}].unable_to_determine_action">
+                                <span class=" font-medium">Usenet Unable to Determine Action</span>
+                            </label>
+                            <select class="select w-full" name="arr[${index}].unable_to_determine_action" id="arr[${index}].unable_to_determine_action">
+                                <option value="">Do Nothing</option>
+                                <option value="remove_and_search">Remove and Search</option>
+                                <option value="remove_and_blacklist_and_search">Remove and Blocklist and Search</option>
+                            </select>
+                            <span class="text-sm opacity-70">Action to take when unable to verify if sample (Usenet only)</span>
+                        </div>
                     </div>
 
-                    <div class="grid grid-cols-3 gap-4">
+                    <div class="grid grid-cols-3 gap-4 mt-6">
                         <div>
                             <label class="label cursor-pointer justify-start gap-2">
                                 <input type="checkbox" class="checkbox checkbox-sm checkbox-primary"
@@ -1340,8 +1352,9 @@ class ConfigManager {
             const selectedDebridInput = getField('selected_debrid');
             const sourceInput = getField('source');
             const sampleActionInput = getField('sample_action');
+            const unableToDetermineActionInput = getField('unable_to_determine_action');
 
-            if (!nameInput || !hostInput || !tokenInput || !cleanupInput || !skipRepairInput || !downloadUncachedInput || !selectedDebridInput || !sourceInput || !sampleActionInput) {
+            if (!nameInput || !hostInput || !tokenInput || !cleanupInput || !skipRepairInput || !downloadUncachedInput || !selectedDebridInput || !sourceInput || !sampleActionInput || !unableToDetermineActionInput) {
                 return;
             }
 
@@ -1354,7 +1367,8 @@ class ConfigManager {
                 download_uncached: downloadUncachedInput.checked,
                 selected_debrid: selectedDebridInput.value,
                 source: sourceInput.value,
-                sample_action: sampleActionInput.value
+                sample_action: sampleActionInput.value,
+                unable_to_determine_action: unableToDetermineActionInput.value
             };
 
             if (arr.name && arr.host) {

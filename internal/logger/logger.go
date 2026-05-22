@@ -1,7 +1,9 @@
 package logger
 
 import (
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,7 +83,12 @@ func New(prefix string) zerolog.Logger {
 		},
 	}
 
-	multi := zerolog.MultiLevelWriter(consoleWriter, fileWriter)
+	var multi io.Writer
+	if flag.Lookup("test.v") != nil {
+		multi = consoleWriter
+	} else {
+		multi = zerolog.MultiLevelWriter(consoleWriter, fileWriter)
+	}
 
 	logger := zerolog.New(multi).
 		With().

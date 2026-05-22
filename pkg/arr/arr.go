@@ -58,13 +58,15 @@ type Arr struct {
 	Host  string `json:"host"`
 	Token string `json:"token"`
 
-	Type             Type   `json:"type"`
-	Cleanup          bool   `json:"cleanup"`
-	SkipRepair       bool   `json:"skip_repair"`
-	DownloadUncached *bool  `json:"download_uncached"`
-	SelectedDebrid   string `json:"selected_debrid,omitempty"` // The debrid service selected for this arr
-	Source           Source `json:"source,omitempty"`          // The source of the arr, e.g. "auto", "manual". Auto means it was automatically detected from the arr
-	SampleAction     string `json:"sample_action,omitempty"`
+	Type             Type           `json:"type"`
+	Cleanup          bool           `json:"cleanup"`
+	SkipRepair       bool           `json:"skip_repair"`
+	DownloadUncached *bool          `json:"download_uncached"`
+	SelectedDebrid   string         `json:"selected_debrid,omitempty"` // The debrid service selected for this arr
+	Source           Source         `json:"source,omitempty"`          // The source of the arr, e.g. "auto", "manual". Auto means it was automatically detected from the arr
+	SampleAction            string         `json:"sample_action,omitempty"`
+	UnableToDetermineAction string         `json:"unable_to_determine_action,omitempty"`
+	logger                  zerolog.Logger `json:"-"`
 }
 
 func New(name, host, token string, cleanup, skipRepair bool, downloadUncached *bool, selectedDebrid, source string) *Arr {
@@ -78,6 +80,7 @@ func New(name, host, token string, cleanup, skipRepair bool, downloadUncached *b
 		DownloadUncached: downloadUncached,
 		SelectedDebrid:   selectedDebrid,
 		Source:           Source(source),
+		logger:           logger.New(name),
 	}
 }
 
@@ -182,6 +185,7 @@ func NewStorage() *Storage {
 		name := a.Name
 		as := New(name, a.Host, a.Token, a.Cleanup, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
 		as.SampleAction = a.SampleAction
+		as.UnableToDetermineAction = a.UnableToDetermineAction
 		if utils.ValidateURL(as.Host) != nil {
 			continue
 		}
@@ -254,19 +258,21 @@ func (s *Storage) SyncToConfig() []config.Arr {
 			exists.DownloadUncached = arr.DownloadUncached
 			exists.SelectedDebrid = arr.SelectedDebrid
 			exists.SampleAction = arr.SampleAction
+			exists.UnableToDetermineAction = arr.UnableToDetermineAction
 			arrConfigs[name] = exists
 		} else {
 			// AddOrUpdate new arr config
 			arrConfigs[name] = config.Arr{
-				Name:             arr.Name,
-				Host:             arr.Host,
-				Token:            arr.Token,
-				Cleanup:          arr.Cleanup,
-				SkipRepair:       arr.SkipRepair,
-				DownloadUncached: arr.DownloadUncached,
-				SelectedDebrid:   arr.SelectedDebrid,
-				Source:           string(arr.Source),
-				SampleAction:     arr.SampleAction,
+				Name:                    arr.Name,
+				Host:                    arr.Host,
+				Token:                   arr.Token,
+				Cleanup:                 arr.Cleanup,
+				SkipRepair:              arr.SkipRepair,
+				DownloadUncached:        arr.DownloadUncached,
+				SelectedDebrid:          arr.SelectedDebrid,
+				Source:                  string(arr.Source),
+				SampleAction:            arr.SampleAction,
+				UnableToDetermineAction: arr.UnableToDetermineAction,
 			}
 		}
 		return true
@@ -284,6 +290,7 @@ func (s *Storage) SyncFromConfig(arrs []config.Arr) {
 	for _, a := range arrs {
 		as := New(a.Name, a.Host, a.Token, a.Cleanup, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
 		as.SampleAction = a.SampleAction
+		as.UnableToDetermineAction = a.UnableToDetermineAction
 		newMaps.Store(a.Name, as)
 	}
 

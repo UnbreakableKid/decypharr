@@ -80,11 +80,12 @@ type Arr struct {
 	DownloadUncached *bool  `json:"download_uncached,omitempty"`
 	SelectedDebrid   string `json:"selected_debrid,omitempty"`
 	Source           string `json:"source,omitempty"` // The source of the arr, e.g. "auto", "config", "". Auto means it was automatically detected from the arr
-	SampleAction     string `json:"sample_action,omitempty"`
+	SampleAction            string `json:"sample_action,omitempty"`
+	UnableToDetermineAction string `json:"unable_to_determine_action,omitempty"`
 }
 
 func (a Arr) IsZero() bool {
-	return a.Name == "" && a.Host == "" && a.Token == "" && !a.Cleanup && !a.SkipRepair && a.DownloadUncached == nil && a.SelectedDebrid == "" && a.Source == "" && a.SampleAction == ""
+	return a.Name == "" && a.Host == "" && a.Token == "" && !a.Cleanup && !a.SkipRepair && a.DownloadUncached == nil && a.SelectedDebrid == "" && a.Source == "" && a.SampleAction == "" && a.UnableToDetermineAction == ""
 }
 
 type CustomFolders struct {

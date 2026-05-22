@@ -143,22 +143,47 @@ func queueFilter(q QueueSchema) QueueAction {
 	return QueueActionNone
 }
 
-func (a *Arr) isUsenetSample(q QueueSchema) bool {
+type UsenetSampleState int
+
+const (
+	UsenetSampleNone UsenetSampleState = iota
+	UsenetSampleIdentified
+	UsenetSampleUnableToDetermine
+)
+
+func (a *Arr) getUsenetSampleState(q QueueSchema) UsenetSampleState {
 	if strings.ToLower(q.Protocol) != "usenet" {
-		return false
+		return UsenetSampleNone
 	}
+	hasSample := false
+	hasUnableToDetermine := false
 	for _, sm := range q.StatusMessages {
 		titleLower := strings.ToLower(sm.Title)
-		if strings.Contains(titleLower, "sample") {
-			return true
+		if strings.Contains(titleLower, "unable to determine") && strings.Contains(titleLower, "sample") {
+			hasUnableToDetermine = true
+		} else if strings.Contains(titleLower, "sample") {
+			hasSample = true
 		}
 		for _, msg := range sm.Messages {
-			if strings.Contains(strings.ToLower(msg), "sample") {
-				return true
+			msgLower := strings.ToLower(msg)
+			if strings.Contains(msgLower, "unable to determine") && strings.Contains(msgLower, "sample") {
+				hasUnableToDetermine = true
+			} else if strings.Contains(msgLower, "sample") {
+				hasSample = true
 			}
 		}
 	}
-	return false
+	if hasUnableToDetermine {
+		return UsenetSampleUnableToDetermine
+	}
+	if hasSample {
+		return UsenetSampleIdentified
+	}
+	return UsenetSampleNone
+}
+
+func (a *Arr) isUsenetSample(q QueueSchema) bool {
+	return a.getUsenetSampleState(q) != UsenetSampleNone
 }
 
 func (a *Arr) DeleteBulk(ids []int, removeFromClient, blocklist, skipRedownload bool) error {
@@ -196,8 +221,17 @@ func (a *Arr) CleanupQueue() error {
 
 	for _, q := range queue {
 		// Check for Usenet sample warning first if sample action is configured
-		if a.SampleAction != "" && a.SampleAction != "do_nothing" && a.SampleAction != "none" && a.isUsenetSample(q) {
-			switch a.SampleAction {
+		sampleState := a.getUsenetSampleState(q)
+		var action string
+		if sampleState == UsenetSampleIdentified {
+			action = a.SampleAction
+		} else if sampleState == UsenetSampleUnableToDetermine {
+			action = a.UnableToDetermineAction
+		}
+
+		if action != "" && action != "do_nothing" && action != "none" {
+			a.logger.Info().Msgf("Queue item %d (%s) is classified as Usenet sample state %d. Executing action: %s", q.Id, q.Title, sampleState, action)
+			switch action {
 			case "remove":
 				deleteRemove = append(deleteRemove, q.Id)
 			case "remove_and_search":
@@ -220,30 +254,42 @@ func (a *Arr) CleanupQueue() error {
 	}
 
 	if len(deleteRemove) > 0 {
+		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove'", len(deleteRemove))
 		if err := a.DeleteBulk(deleteRemove, true, false, true); err != nil {
-			fmt.Println("Error deleting queue items (remove):", err)
+			a.logger.Error().Err(err).Msg("Error deleting queue items (remove)")
+		} else {
+			a.logger.Info().Msgf("Successfully removed %d sample queue items from client", len(deleteRemove))
 		}
 	}
 	if len(deleteRemoveAndSearch) > 0 {
+		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove_and_search'", len(deleteRemoveAndSearch))
 		if err := a.DeleteBulk(deleteRemoveAndSearch, true, false, false); err != nil {
-			fmt.Println("Error deleting queue items (remove and search):", err)
+			a.logger.Error().Err(err).Msg("Error deleting queue items (remove and search)")
+		} else {
+			a.logger.Info().Msgf("Successfully removed and searched %d sample queue items", len(deleteRemoveAndSearch))
 		}
 	}
 	if len(deleteRemoveAndBlocklist) > 0 {
+		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove_and_blocklist'", len(deleteRemoveAndBlocklist))
 		if err := a.DeleteBulk(deleteRemoveAndBlocklist, true, true, true); err != nil {
-			fmt.Println("Error deleting queue items (remove and blocklist):", err)
+			a.logger.Error().Err(err).Msg("Error deleting queue items (remove and blocklist)")
+		} else {
+			a.logger.Info().Msgf("Successfully removed and blocklisted %d sample queue items", len(deleteRemoveAndBlocklist))
 		}
 	}
 	if len(deleteRemoveAndBlocklistAndSearch) > 0 {
+		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove_and_blocklist_and_search'", len(deleteRemoveAndBlocklistAndSearch))
 		if err := a.DeleteBulk(deleteRemoveAndBlocklistAndSearch, true, true, false); err != nil {
-			fmt.Println("Error deleting queue items (remove and blocklist and search):", err)
+			a.logger.Error().Err(err).Msg("Error deleting queue items (remove and blocklist and search)")
+		} else {
+			a.logger.Info().Msgf("Successfully removed, blocklisted and searched %d sample queue items", len(deleteRemoveAndBlocklistAndSearch))
 		}
 	}
 
 	if len(manualImports) > 0 {
 		go func() {
 			if err := a.ManualImportItems(manualImports); err != nil {
-				fmt.Println("Error during manual import:", err)
+				a.logger.Error().Err(err).Msg("Error during manual import")
 			}
 		}()
 	}
