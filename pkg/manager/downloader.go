@@ -373,7 +373,7 @@ func (d *Downloader) waitForSymlinkFilesReady(filePaths []string, timeout time.D
 
 	d.logger.Debug().
 		Int("symlinks", len(filePaths)).
-		Duration("timeout", timeout).
+		Dur("timeout", timeout).
 		Msg("Waiting for symlink files to be ready and readable")
 
 	pending := make(map[string]error, len(filePaths))
