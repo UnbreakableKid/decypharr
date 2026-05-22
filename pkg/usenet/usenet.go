@@ -490,6 +490,14 @@ func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) err
 			checker = u.CheckFileAvailability
 		}
 		if err := checker(ctx, file, preImportSamplePercent); err != nil {
+			allowPartial := true
+			if config.Get().Usenet.AllowPartialProcess != nil {
+				allowPartial = *config.Get().Usenet.AllowPartialProcess
+			}
+			if !allowPartial {
+				return err
+			}
+
 			u.logger.Warn().
 				Err(err).
 				Str("nzb_id", nzb.ID).

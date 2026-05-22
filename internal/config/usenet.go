@@ -62,6 +62,8 @@ type Usenet struct {
 
 	SkipRepair bool `json:"skip_repair,omitempty"` // Skip repairing nzb/usenet files
 
+	AllowPartialProcess *bool `json:"allow_partial_process,omitempty"` // Allow partial processing of NZBs
+
 	DeobfuscateMode DeobfuscateMode `json:"deobfuscate_mode,omitempty"` // Renaming mode for obfuscated files
 }
 
@@ -70,6 +72,11 @@ func (u Usenet) IsZero() bool {
 }
 
 func (c *Config) updateUsenetConfig() {
+	if c.Usenet.AllowPartialProcess == nil {
+		defaultValue := true
+		c.Usenet.AllowPartialProcess = &defaultValue
+	}
+
 	// Per-stream configuration defaults
 	if c.Usenet.MaxConnections == 0 {
 		c.Usenet.MaxConnections = 15 // Default: 15 connections per file
@@ -188,6 +195,11 @@ func (c *Config) applyUsenetEnvVars() {
 
 	if skipRepair := getEnv("USENET__SKIP_REPAIR"); skipRepair != "" {
 		c.Usenet.SkipRepair = parseBool(skipRepair)
+	}
+
+	if allowPartialProcess := getEnv("USENET__ALLOW_PARTIAL_PROCESS"); allowPartialProcess != "" {
+		v := parseBool(allowPartialProcess)
+		c.Usenet.AllowPartialProcess = &v
 	}
 
 	if deobfuscateMode := getEnv("USENET__DEOBFUSCATE_MODE"); deobfuscateMode != "" {

@@ -6,10 +6,14 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func TestCheckNZBAvailability(t *testing.T) {
+	// Setup a temporary config path so config.Get() doesn't fail
+	config.SetConfigPath(t.TempDir())
+
 	// Setup a basic Usenet struct with a dummy logger
 	u := &Usenet{
 		logger: zerolog.Nop(),
@@ -124,6 +128,41 @@ func TestCheckNZBAvailability(t *testing.T) {
 		// Since the only non-deleted playable file (file2.mkv) failed, the overall check should fail.
 		if err == nil {
 			t.Fatal("expected error since the only playable file failed")
+		}
+	})
+
+	t.Run("AllowPartialProcess is false and one file fails", func(t *testing.T) {
+		// Mock config
+		orig := config.Get().Usenet.AllowPartialProcess
+		defer func() {
+			config.Get().Usenet.AllowPartialProcess = orig
+		}()
+		allowPartial := false
+		config.Get().Usenet.AllowPartialProcess = &allowPartial
+
+		nzb := &storage.NZB{
+			ID:        "nzb5",
+			TotalSize: 300,
+			Files: []storage.NZBFile{
+				{Name: "file1.mkv", Size: 100, Segments: []storage.NZBSegment{{Bytes: 100}}, FileType: storage.NZBFileTypeMedia},
+				{Name: "file2.mkv", Size: 200, Segments: []storage.NZBSegment{{Bytes: 200}}, FileType: storage.NZBFileTypeMedia},
+			},
+		}
+
+		u.checkFileAvailabilityFunc = func(ctx context.Context, file *storage.NZBFile, samplePercent int) error {
+			if file.Name == "file1.mkv" {
+				return errors.New("not found")
+			}
+			return nil
+		}
+
+		err := u.checkNZBAvailability(context.Background(), nzb)
+		if err == nil {
+			t.Fatal("expected error since allowPartialProcess is false and file1.mkv failed availability")
+		}
+
+		if err.Error() != "not found" {
+			t.Errorf("expected 'not found' error, got: %v", err)
 		}
 	})
 }

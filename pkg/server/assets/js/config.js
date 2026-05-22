@@ -1270,6 +1270,7 @@ class ConfigManager {
             max_concurrent_nzb: parseInt(document.querySelector('[name="usenet.max_concurrent_nzb"]')?.value) || 2,
             disk_buffer_path: document.querySelector('[name="usenet.disk_buffer_path"]')?.value || "",
             skip_repair: document.querySelector('[name="usenet.skip_repair"]').checked,
+            allow_partial_process: document.querySelector('[name="usenet.allow_partial_process"]').checked,
             deobfuscate_mode: document.querySelector('[name="usenet.deobfuscate_mode"]').value
         };
     }
@@ -1702,6 +1703,7 @@ class ConfigManager {
             'max_concurrent_nzb': usenet.max_concurrent_nzb,
             'disk_buffer_path': usenet.disk_buffer_path,
             'skip_repair': usenet.skip_repair,
+            'allow_partial_process': usenet.allow_partial_process,
             'deobfuscate_mode': usenet.deobfuscate_mode
         };
 
