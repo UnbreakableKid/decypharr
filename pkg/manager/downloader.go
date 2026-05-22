@@ -227,6 +227,14 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 }
 
 func (d *Downloader) createSymlinksWhenMountFilesAppear(entry *storage.Entry, files []*storage.File, mountPath string, symlinkDir string) ([]string, error) {
+	d.logger.Debug().
+		Str("entry", entry.Name).
+		Str("protocol", string(entry.Protocol)).
+		Str("mount_path", mountPath).
+		Str("symlink_dir", symlinkDir).
+		Int("files", len(files)).
+		Msg("Starting createSymlinksWhenMountFilesAppear")
+
 	remainingFiles := make(map[string]*storage.File, len(files))
 	for _, file := range files {
 		remainingFiles[file.Name] = file
@@ -255,6 +263,12 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(entry *storage.Entry, fi
 
 			if file, exists := remainingFiles[entryName]; exists {
 				fileSymlinkPath := filepath.Join(symlinkDir, file.Name)
+				d.logger.Debug().
+					Str("entry", entry.Name).
+					Str("file", file.Name).
+					Str("target", fullPath).
+					Str("symlink", fileSymlinkPath).
+					Msg("Target file found on mount (torrent recursive scan). Creating symlink.")
 				if err := os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
 					return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, err)
 				}
@@ -276,9 +290,50 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(entry *storage.Entry, fi
 	for len(remainingFiles) > 0 {
 		attempt++
 		scanErr = nil
-		if err := checkDirectory(mountPath); err != nil {
-			return nil, err
+
+		if entry.Protocol == config.ProtocolNZB {
+			d.logger.Debug().
+				Str("entry", entry.Name).
+				Int("attempt", attempt).
+				Int("pending", len(remainingFiles)).
+				Msg("Checking existence of remaining NZB files on mount path directly (optimized)")
+
+			for name, file := range remainingFiles {
+				fullPath := filepath.Join(mountPath, name)
+				if _, err := os.Lstat(fullPath); err == nil {
+					fileSymlinkPath := filepath.Join(symlinkDir, file.Name)
+					d.logger.Debug().
+						Str("entry", entry.Name).
+						Str("file", file.Name).
+						Str("target", fullPath).
+						Str("symlink", fileSymlinkPath).
+						Msg("Target file found on mount (optimized NZB check). Creating symlink.")
+
+					if err := os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
+						return nil, fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, err)
+					}
+					filePaths = append(filePaths, fileSymlinkPath)
+					delete(remainingFiles, name)
+					d.logger.Info().Msgf("File is ready: %s/%s", entry.GetFolder(), file.Name)
+				} else {
+					if !os.IsNotExist(err) {
+						d.logger.Debug().
+							Str("entry", entry.Name).
+							Str("file", file.Name).
+							Err(err).
+							Msg("Failed to check file status on mount path")
+						if scanErr == nil {
+							scanErr = err
+						}
+					}
+				}
+			}
+		} else {
+			if err := checkDirectory(mountPath); err != nil {
+				return nil, err
+			}
 		}
+
 		lastScanErr = scanErr
 		if len(remainingFiles) == 0 {
 			break
@@ -316,6 +371,11 @@ func (d *Downloader) waitForSymlinkFilesReady(filePaths []string, timeout time.D
 		return nil
 	}
 
+	d.logger.Debug().
+		Int("symlinks", len(filePaths)).
+		Duration("timeout", timeout).
+		Msg("Waiting for symlink files to be ready and readable")
+
 	pending := make(map[string]error, len(filePaths))
 	for _, path := range filePaths {
 		pending[path] = nil
@@ -328,10 +388,18 @@ func (d *Downloader) waitForSymlinkFilesReady(filePaths []string, timeout time.D
 	for len(pending) > 0 {
 		attempt++
 		for path := range pending {
-			if err := verifySymlinkFileReady(path); err != nil {
+			err := verifySymlinkFileReady(path)
+			if err != nil {
 				pending[path] = err
+				d.logger.Debug().
+					Str("path", path).
+					Err(err).
+					Msg("Symlink target not ready yet")
 				continue
 			}
+			d.logger.Debug().
+				Str("path", path).
+				Msg("Symlink target is ready and readable")
 			delete(pending, path)
 		}
 		if len(pending) == 0 {
