@@ -156,6 +156,9 @@ func (m *Manager) GetEntryInfo(name string) (*FileInfo, error) {
 	var modTime time.Time
 	var infohash string
 	for _, f := range entry.Files {
+		if f.Deleted {
+			continue
+		}
 		modTime = f.AddedOn
 		infohash = f.InfoHash
 		break
@@ -354,6 +357,9 @@ func (m *Manager) getTorrentChildren(name string) (*FileInfo, []FileInfo) {
 	infos := make([]FileInfo, 0, len(entry.Files))
 	size := int64(0)
 	for _, file := range entry.Files {
+		if file.Deleted {
+			continue
+		}
 		infos = append(infos, FileInfo{
 			name:      file.Name,
 			size:      file.Size,

@@ -180,13 +180,14 @@ func (r *contextSectionReader) Read(p []byte) (int, error) {
 }
 
 type Usenet struct {
-	nntp           *nntp.Client
-	logger         zerolog.Logger
-	metadataDir    string
-	nzbStorage     *NZBStorage // File-based NZB metadata storage
-	maxConnections int         // Connections allocated per file for parsing and streaming
-	prefetchSize   int64       // Prefetch size in bytes
-	failedFiles    *xsync.Map[string, error]
+	nntp                      *nntp.Client
+	logger                    zerolog.Logger
+	metadataDir               string
+	nzbStorage                *NZBStorage // File-based NZB metadata storage
+	maxConnections            int         // Connections allocated per file for parsing and streaming
+	prefetchSize              int64       // Prefetch size in bytes
+	failedFiles               *xsync.Map[string, error]
+	checkFileAvailabilityFunc func(ctx context.Context, file *storage.NZBFile, samplePercent int) error
 
 	fs *xsync.Map[string, *fsEntry]
 }
@@ -249,6 +250,7 @@ func New() (*Usenet, error) {
 		fs:             xsync.NewMap[string, *fsEntry](),
 		failedFiles:    xsync.NewMap[string, error](),
 	}
+	u.checkFileAvailabilityFunc = u.CheckFileAvailability
 
 	// clean streams dir
 	u.initStreamsDir(cfg.Usenet.DiskBufferPath)
@@ -464,6 +466,9 @@ func (u *Usenet) Process(ctx context.Context, nzb *storage.NZB, groups map[strin
 // CheckFileAvailability, so they do not fail the NZB. It returns on the first
 // definitively-missing file (fail fast).
 func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) error {
+	var playableCount int
+	var failedCount int
+
 	for i := range nzb.Files {
 		file := &nzb.Files[i]
 		if file.IsDeleted || len(file.Segments) == 0 {
@@ -473,18 +478,31 @@ func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) err
 		case storage.NZBFileTypePar2, storage.NZBFileTypeIgnore:
 			continue
 		}
+
+		playableCount++
+
 		if ctx.Err() != nil {
 			// Cancelled/timed out: not a content failure — don't fail the NZB.
 			return nil
 		}
-		if err := u.CheckFileAvailability(ctx, file, preImportSamplePercent); err != nil {
+		checker := u.checkFileAvailabilityFunc
+		if checker == nil {
+			checker = u.CheckFileAvailability
+		}
+		if err := checker(ctx, file, preImportSamplePercent); err != nil {
 			u.logger.Warn().
 				Err(err).
 				Str("nzb_id", nzb.ID).
 				Str("file", file.Name).
-				Msg("Post-parse availability check failed; marking NZB unavailable")
-			return fmt.Errorf("file %q unavailable: %w", file.Name, err)
+				Msg("Post-parse availability check failed for file; marking file as deleted/skipped")
+			file.IsDeleted = true
+			nzb.TotalSize -= file.Size
+			failedCount++
 		}
+	}
+
+	if playableCount > 0 && failedCount == playableCount {
+		return fmt.Errorf("all playable files in NZB are unavailable")
 	}
 	return nil
 }

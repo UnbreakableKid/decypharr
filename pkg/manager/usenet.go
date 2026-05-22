@@ -79,6 +79,7 @@ func (m *Manager) processNZB(ctx context.Context, entry *storage.Entry, metadata
 			Size:     file.Size,
 			InfoHash: entry.InfoHash,
 			AddedOn:  entry.AddedOn,
+			Deleted:  file.IsDeleted,
 		}
 		entry.Files[file.Name] = tFile
 	}
@@ -94,6 +95,9 @@ func (m *Manager) processNZB(ctx context.Context, entry *storage.Entry, metadata
 	_ = m.queue.Update(entry)
 
 	for _, file := range metadata.Files {
+		if file.IsDeleted {
+			continue
+		}
 		go func(f storage.NZBFile) {
 			cacheCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -263,6 +267,7 @@ func (m *Manager) syncNZBs(ctx context.Context) error {
 				InfoHash: entry.InfoHash,
 				AddedOn:  entry.AddedOn,
 				Path:     file.Name,
+				Deleted:  file.IsDeleted,
 			}
 			entry.Files[file.Name] = tFile
 		}

@@ -53,6 +53,10 @@ func (m *Manager) fixNZBFileSizes(ctx context.Context) {
 						file.Size = nzbFile.Size
 						changedEntry = true
 					}
+					if file.Deleted != nzbFile.IsDeleted {
+						file.Deleted = nzbFile.IsDeleted
+						changedEntry = true
+					}
 				}
 			}
 
@@ -83,6 +87,9 @@ func normalizeNZBFileSizes(nzb *storage.NZB) (bool, int64) {
 
 	for i := range nzb.Files {
 		file := &nzb.Files[i]
+		if file.IsDeleted {
+			continue
+		}
 		streamSize := streamSizeFromSegments(file.Segments)
 		if streamSize > 0 && (file.Size <= 0 || file.Size > streamSize) {
 			file.Size = streamSize
