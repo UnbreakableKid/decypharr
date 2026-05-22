@@ -607,12 +607,12 @@ func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*Fi
 
 		var groupKey string
 		if item.actualFilename != "" && item.actualFilename != item.file.Filename {
-			groupKey = p.getBaseFilename(item.actualFilename)
+			groupKey = getBaseFilename(item.actualFilename)
 		} else {
 			groupKey = item.file.Basefilename
 		}
 		if groupKey == "" {
-			groupKey = p.getBaseFilename(item.file.Filename)
+			groupKey = getBaseFilename(item.file.Filename)
 			if groupKey == "" {
 				groupKey = item.file.Filename
 			}
@@ -685,7 +685,7 @@ func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*Fi
 	return groups
 }
 
-func (p *NZBParser) getBaseFilename(filename string) string {
+func getBaseFilename(filename string) string {
 	if filename == "" {
 		return ""
 	}
@@ -728,7 +728,7 @@ func (p *NZBParser) detectFileType(filename string) storage.NZBFileType {
 	}
 
 	// Check rar next
-	if p.isRarFile(lower) {
+	if isRarFile(lower) {
 		return storage.NZBFileTypeRar
 	}
 
@@ -760,7 +760,7 @@ func (p *NZBParser) detectFileType(filename string) storage.NZBFileType {
 }
 
 // Simplified RAR detection
-func (p *NZBParser) isRarFile(filename string) bool {
+func isRarFile(filename string) bool {
 	return rarMainPattern.MatchString(filename) ||
 		rarPartPattern.MatchString(filename) ||
 		rarVolumePattern.MatchString(filename)

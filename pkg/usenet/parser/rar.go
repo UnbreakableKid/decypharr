@@ -110,9 +110,10 @@ type RARFileEntry struct {
 
 // RARParser handles parsing RAR archives from usenet segments
 type RARParser struct {
-	manager       *nntp.Client
-	maxConcurrent int
-	logger        zerolog.Logger
+	manager        *nntp.Client
+	maxConcurrent  int
+	logger         zerolog.Logger
+	parseArchiveFn func(ctx context.Context, volumes []*types.Volume, password string) (*RARArchiveInfo, error)
 }
 
 // NewRARParser creates a new RAR parser
@@ -154,14 +155,47 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	filename := group.BaseName
 	filename = utils.RemoveInvalidChars(path.Base(filename))
 
-	// Build base segments and volume info
-	baseSegments, volumeInfos, _ := buildBaseSegments(group)
+	return p.processRecursive(ctx, volumes, password, group, filename, 0)
+}
+
+func (p *RARParser) processRecursive(
+	ctx context.Context,
+	volumes []*types.Volume,
+	password string,
+	group *FileGroup,
+	baseName string,
+	depth int,
+) ([]*storage.NZBFile, error) {
+	if depth > 3 {
+		return nil, fmt.Errorf("recursion depth limit exceeded (possible zip/rar bomb)")
+	}
+
+	// Build base segments and volume info from volumes
+	var baseSegments []storage.NZBSegment
+	var volumeInfos []storage.ArchiveVolumeInfo
+	for _, vol := range volumes {
+		start := len(baseSegments)
+		baseSegments = append(baseSegments, vol.Segments...)
+		volumeInfos = append(volumeInfos, storage.ArchiveVolumeInfo{
+			Name:         vol.Name,
+			Size:         vol.Size,
+			SegmentStart: start,
+			SegmentEnd:   len(baseSegments),
+		})
+	}
+
 	if len(baseSegments) == 0 {
-		return nil, fmt.Errorf("no base segments found for RAR volumes")
+		return nil, fmt.Errorf("no base segments found for RAR volumes at depth %d", depth)
 	}
 
 	// Parse RAR archive to get file entries with volume parts
-	archiveInfo, err := p.parseArchive(ctx, volumes, password)
+	var archiveInfo *RARArchiveInfo
+	var err error
+	if p.parseArchiveFn != nil {
+		archiveInfo, err = p.parseArchiveFn(ctx, volumes, password)
+	} else {
+		archiveInfo, err = p.parseArchive(ctx, volumes, password)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse RAR archive: %w", err)
 	}
@@ -174,7 +208,8 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	// Build volume offset map
 	volumeOffsetMap := buildVolumeOffsetMap(volumeInfos)
 
-	files := make([]*storage.NZBFile, 0, len(archiveInfo.Files))
+	var files []*storage.NZBFile
+	nestedRarGroups := make(map[string][]*RARFileEntry)
 	hasNoneStored := false
 
 	// Parse each file in the RAR archive
@@ -190,7 +225,13 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 
 		name := utils.RemoveInvalidChars(path.Base(rarFile.Name))
 		if name == "" {
-			name = filename
+			name = baseName
+		}
+
+		if isRarFile(name) {
+			base := getBaseFilename(name)
+			nestedRarGroups[base] = append(nestedRarGroups[base], rarFile)
+			continue
 		}
 
 		// Build segments for this file across all its volume parts
@@ -242,12 +283,62 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 		files = append(files, file)
 	}
 
+	// Process nested RAR groups recursively
+	for base, parts := range nestedRarGroups {
+		sort.Slice(parts, func(i, j int) bool {
+			oi := getRARVolumeOrder(parts[i].Name)
+			oj := getRARVolumeOrder(parts[j].Name)
+			if oi != oj {
+				return oi < oj
+			}
+			return parts[i].VolumeIndex < parts[j].VolumeIndex
+		})
+
+		var nestedVolumes []*types.Volume
+		for idx, part := range parts {
+			fileSegments, err := p.buildSegmentsForFile(part, baseSegments, volumeOffsetMap)
+			if err != nil || len(fileSegments) == 0 {
+				continue
+			}
+
+			streamSize := int64(0)
+			for _, seg := range fileSegments {
+				streamSize += seg.Bytes
+			}
+
+			size := part.UncompressedSize
+			if size <= 0 || (streamSize > 0 && size > streamSize) {
+				size = streamSize
+			}
+
+			nestedVolumes = append(nestedVolumes, &types.Volume{
+				Index:    idx,
+				Name:     part.Name,
+				Size:     size,
+				Segments: fileSegments,
+			})
+		}
+
+		if len(nestedVolumes) > 0 {
+			nestedFiles, err := p.processRecursive(ctx, nestedVolumes, password, group, base, depth+1)
+			if err != nil {
+				if strings.Contains(err.Error(), "recursion depth limit exceeded") {
+					return nil, err
+				}
+				p.logger.Warn().Err(err).Str("nested_base", base).Msg("Failed to process nested RAR archive")
+				continue
+			}
+			files = append(files, nestedFiles...)
+		}
+	}
+
 	if len(files) == 0 {
 		if hasNoneStored {
-			return nil, fmt.Errorf("RAR archive contains no stored (uncompressed) files; cannot stream")
+			return nil, fmt.Errorf("RAR archive contains no stored (uncompressed) files at depth %d; cannot stream", depth)
 		}
-		return nil, fmt.Errorf("no valid files found in RAR archive")
+		return nil, fmt.Errorf("no valid files found in RAR archive at depth %d", depth)
 	}
+
 	return files, nil
 }
 
@@ -1191,7 +1282,7 @@ func (p *RARParser) buildSegmentsForVolumePart(
 			Number:           seg.Number,
 			MessageID:        seg.MessageID,
 			Bytes:            bytesToRead,
-			SegmentDataStart: segmentDataStart, // Where to start reading within this NNTP segment
+			SegmentDataStart: seg.SegmentDataStart + segmentDataStart, // Where to start reading within this NNTP segment
 			Group:            seg.Group,
 			// StartOffset/EndOffset left as 0 - will be set by caller
 		}
@@ -1277,7 +1368,7 @@ func sliceSegmentsForRangeSimple(
 			StartOffset:      outputPos,                   // Position in the OUTPUT file
 			EndOffset:        outputPos + bytesToRead - 1, // End position in OUTPUT file
 			Group:            seg.Group,
-			SegmentDataStart: relStart, // Where to start reading within this NNTP segment
+			SegmentDataStart: seg.SegmentDataStart + relStart, // Where to start reading within this NNTP segment
 		}
 
 		result = append(result, slicedSeg)
