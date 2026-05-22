@@ -230,7 +230,25 @@ func (a *Arr) CleanupQueue() error {
 		}
 
 		if action != "" && action != "do_nothing" && action != "none" {
-			a.logger.Info().Msgf("Queue item %d (%s) is classified as Usenet sample state %d. Executing action: %s", q.Id, q.Title, sampleState, action)
+			var stateStr string
+			switch sampleState {
+			case UsenetSampleIdentified:
+				stateStr = "Identified Sample"
+			case UsenetSampleUnableToDetermine:
+				stateStr = "Unable to Determine if Sample"
+			default:
+				stateStr = "None"
+			}
+			var actionFriendlyStr string
+			switch action {
+			case "fail":
+				actionFriendlyStr = "Mark as Failed"
+			case "fail_blocklist":
+				actionFriendlyStr = "Mark as Failed and Blocklist"
+			default:
+				actionFriendlyStr = action
+			}
+			a.logger.Info().Msgf("Queue item %d (%s) is classified as: %s. Executing action: %s", q.Id, q.Title, stateStr, actionFriendlyStr)
 			switch action {
 			case "remove":
 				deleteRemove = append(deleteRemove, q.Id)
@@ -254,35 +272,35 @@ func (a *Arr) CleanupQueue() error {
 	}
 
 	if len(deleteRemove) > 0 {
-		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove'", len(deleteRemove))
+		a.logger.Debug().Msgf("Bulk removing %d sample queue items from client", len(deleteRemove))
 		if err := a.DeleteBulk(deleteRemove, true, false, true); err != nil {
-			a.logger.Error().Err(err).Msg("Error deleting queue items (remove)")
+			a.logger.Error().Err(err).Msg("Error removing sample queue items")
 		} else {
 			a.logger.Info().Msgf("Successfully removed %d sample queue items from client", len(deleteRemove))
 		}
 	}
 	if len(deleteRemoveAndSearch) > 0 {
-		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove_and_search'", len(deleteRemoveAndSearch))
+		a.logger.Debug().Msgf("Bulk marking %d sample queue items as failed", len(deleteRemoveAndSearch))
 		if err := a.DeleteBulk(deleteRemoveAndSearch, true, false, false); err != nil {
-			a.logger.Error().Err(err).Msg("Error deleting queue items (remove and search)")
+			a.logger.Error().Err(err).Msg("Error marking sample queue items as failed")
 		} else {
-			a.logger.Info().Msgf("Successfully removed and searched %d sample queue items", len(deleteRemoveAndSearch))
+			a.logger.Info().Msgf("Successfully marked %d sample queue items as failed (triggers Arr re-search)", len(deleteRemoveAndSearch))
 		}
 	}
 	if len(deleteRemoveAndBlocklist) > 0 {
-		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove_and_blocklist'", len(deleteRemoveAndBlocklist))
+		a.logger.Debug().Msgf("Bulk removing and blocklisting %d sample queue items", len(deleteRemoveAndBlocklist))
 		if err := a.DeleteBulk(deleteRemoveAndBlocklist, true, true, true); err != nil {
-			a.logger.Error().Err(err).Msg("Error deleting queue items (remove and blocklist)")
+			a.logger.Error().Err(err).Msg("Error removing and blocklisting sample queue items")
 		} else {
 			a.logger.Info().Msgf("Successfully removed and blocklisted %d sample queue items", len(deleteRemoveAndBlocklist))
 		}
 	}
 	if len(deleteRemoveAndBlocklistAndSearch) > 0 {
-		a.logger.Debug().Msgf("Bulk deleting %d sample queue items with action 'remove_and_blocklist_and_search'", len(deleteRemoveAndBlocklistAndSearch))
+		a.logger.Debug().Msgf("Bulk marking %d sample queue items as failed and blocklisted", len(deleteRemoveAndBlocklistAndSearch))
 		if err := a.DeleteBulk(deleteRemoveAndBlocklistAndSearch, true, true, false); err != nil {
-			a.logger.Error().Err(err).Msg("Error deleting queue items (remove and blocklist and search)")
+			a.logger.Error().Err(err).Msg("Error marking sample queue items as failed and blocklisted")
 		} else {
-			a.logger.Info().Msgf("Successfully removed, blocklisted and searched %d sample queue items", len(deleteRemoveAndBlocklistAndSearch))
+			a.logger.Info().Msgf("Successfully marked %d sample queue items as failed and blocklisted (triggers Arr re-search)", len(deleteRemoveAndBlocklistAndSearch))
 		}
 	}
 
