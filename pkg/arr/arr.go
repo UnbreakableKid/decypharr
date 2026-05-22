@@ -64,6 +64,7 @@ type Arr struct {
 	DownloadUncached *bool  `json:"download_uncached"`
 	SelectedDebrid   string `json:"selected_debrid,omitempty"` // The debrid service selected for this arr
 	Source           Source `json:"source,omitempty"`          // The source of the arr, e.g. "auto", "manual". Auto means it was automatically detected from the arr
+	SampleAction     string `json:"sample_action,omitempty"`
 }
 
 func New(name, host, token string, cleanup, skipRepair bool, downloadUncached *bool, selectedDebrid, source string) *Arr {
@@ -180,6 +181,7 @@ func NewStorage() *Storage {
 		}
 		name := a.Name
 		as := New(name, a.Host, a.Token, a.Cleanup, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
+		as.SampleAction = a.SampleAction
 		if utils.ValidateURL(as.Host) != nil {
 			continue
 		}
@@ -251,6 +253,7 @@ func (s *Storage) SyncToConfig() []config.Arr {
 			exists.SkipRepair = arr.SkipRepair
 			exists.DownloadUncached = arr.DownloadUncached
 			exists.SelectedDebrid = arr.SelectedDebrid
+			exists.SampleAction = arr.SampleAction
 			arrConfigs[name] = exists
 		} else {
 			// AddOrUpdate new arr config
@@ -263,6 +266,7 @@ func (s *Storage) SyncToConfig() []config.Arr {
 				DownloadUncached: arr.DownloadUncached,
 				SelectedDebrid:   arr.SelectedDebrid,
 				Source:           string(arr.Source),
+				SampleAction:     arr.SampleAction,
 			}
 		}
 		return true
@@ -278,7 +282,9 @@ func (s *Storage) SyncToConfig() []config.Arr {
 func (s *Storage) SyncFromConfig(arrs []config.Arr) {
 	newMaps := xsync.NewMap[string, *Arr]()
 	for _, a := range arrs {
-		newMaps.Store(a.Name, New(a.Name, a.Host, a.Token, a.Cleanup, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source))
+		as := New(a.Name, a.Host, a.Token, a.Cleanup, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
+		as.SampleAction = a.SampleAction
+		newMaps.Store(a.Name, as)
 	}
 
 	// AddOrUpdate or update arrs from config

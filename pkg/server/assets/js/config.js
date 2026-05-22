@@ -1013,6 +1013,18 @@ class ConfigManager {
                             </select>
                             <span class="text-sm opacity-70">Which debrid service this Arr should prefer</span>
                         </div>
+
+                        <div>
+                            <label class="label" for="arr[${index}].sample_action">
+                                <span class=" font-medium">Usenet Sample Action</span>
+                            </label>
+                            <select class="select w-full" name="arr[${index}].sample_action" id="arr[${index}].sample_action">
+                                <option value="">Do Nothing</option>
+                                <option value="remove_and_search">Remove and Search</option>
+                                <option value="remove_and_blacklist_and_search">Remove and Blocklist and Search</option>
+                            </select>
+                            <span class="text-sm opacity-70">Action to take when entry is a sample (Usenet only)</span>
+                        </div>
                     </div>
 
                     <div class="grid grid-cols-3 gap-4">
@@ -1327,8 +1339,9 @@ class ConfigManager {
             const downloadUncachedInput = getField('download_uncached');
             const selectedDebridInput = getField('selected_debrid');
             const sourceInput = getField('source');
+            const sampleActionInput = getField('sample_action');
 
-            if (!nameInput || !hostInput || !tokenInput || !cleanupInput || !skipRepairInput || !downloadUncachedInput || !selectedDebridInput || !sourceInput) {
+            if (!nameInput || !hostInput || !tokenInput || !cleanupInput || !skipRepairInput || !downloadUncachedInput || !selectedDebridInput || !sourceInput || !sampleActionInput) {
                 return;
             }
 
@@ -1340,7 +1353,8 @@ class ConfigManager {
                 skip_repair: skipRepairInput.checked,
                 download_uncached: downloadUncachedInput.checked,
                 selected_debrid: selectedDebridInput.value,
-                source: sourceInput.value
+                source: sourceInput.value,
+                sample_action: sampleActionInput.value
             };
 
             if (arr.name && arr.host) {

@@ -143,32 +143,106 @@ func queueFilter(q QueueSchema) QueueAction {
 	return QueueActionNone
 }
 
+func (a *Arr) isUsenetSample(q QueueSchema) bool {
+	if strings.ToLower(q.Protocol) != "usenet" {
+		return false
+	}
+	for _, sm := range q.StatusMessages {
+		titleLower := strings.ToLower(sm.Title)
+		if strings.Contains(titleLower, "sample") {
+			return true
+		}
+		for _, msg := range sm.Messages {
+			if strings.Contains(strings.ToLower(msg), "sample") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (a *Arr) DeleteBulk(ids []int, removeFromClient, blocklist, skipRedownload bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	payload := struct {
+		Ids []int `json:"ids"`
+	}{
+		Ids: ids,
+	}
+	query := gourl.Values{}
+	query.Add("removeFromClient", strconv.FormatBool(removeFromClient))
+	query.Add("blocklist", strconv.FormatBool(blocklist))
+	query.Add("skipRedownload", strconv.FormatBool(skipRedownload))
+	query.Add("changeCategory", "false")
+	url := "api/v3/queue/bulk" + "?" + query.Encode()
+
+	_, err := a.Request(http.MethodDelete, url, payload, nil)
+	return err
+}
+
 func (a *Arr) CleanupQueue() error {
 	if a == nil {
 		return fmt.Errorf("arr not configured")
 	}
 	queue := a.GetQueue()
-	blacklists := make(map[int]bool)
+
+	var deleteRemove []int
+	var deleteRemoveAndSearch []int
+	var deleteRemoveAndBlocklist []int
+	var deleteRemoveAndBlocklistAndSearch []int
+
 	manualImports := make(map[string]bool)
+
 	for _, q := range queue {
+		// Check for Usenet sample warning first if sample action is configured
+		if a.SampleAction != "" && a.SampleAction != "do_nothing" && a.SampleAction != "none" && a.isUsenetSample(q) {
+			switch a.SampleAction {
+			case "remove":
+				deleteRemove = append(deleteRemove, q.Id)
+			case "remove_and_search":
+				deleteRemoveAndSearch = append(deleteRemoveAndSearch, q.Id)
+			case "remove_and_blocklist":
+				deleteRemoveAndBlocklist = append(deleteRemoveAndBlocklist, q.Id)
+			case "remove_and_blocklist_and_search", "remove_and_blacklist_and_search":
+				deleteRemoveAndBlocklistAndSearch = append(deleteRemoveAndBlocklistAndSearch, q.Id)
+			}
+			continue // Skip standard queue filters for samples
+		}
+
+		// Standard queue filter
 		switch queueFilter(q) {
 		case QueueActionBlocklist:
-			blacklists[q.Id] = true
+			deleteRemoveAndBlocklistAndSearch = append(deleteRemoveAndBlocklistAndSearch, q.Id)
 		case QueueActionImport:
 			manualImports[q.DownloadId] = true
 		}
 	}
 
-	if len(blacklists) > 0 {
-		if err := a.BlackListAndResearchItems(blacklists); err != nil {
-			// log error
-			fmt.Println("Error during blacklist and research:", err)
+	if len(deleteRemove) > 0 {
+		if err := a.DeleteBulk(deleteRemove, true, false, true); err != nil {
+			fmt.Println("Error deleting queue items (remove):", err)
 		}
 	}
+	if len(deleteRemoveAndSearch) > 0 {
+		if err := a.DeleteBulk(deleteRemoveAndSearch, true, false, false); err != nil {
+			fmt.Println("Error deleting queue items (remove and search):", err)
+		}
+	}
+	if len(deleteRemoveAndBlocklist) > 0 {
+		if err := a.DeleteBulk(deleteRemoveAndBlocklist, true, true, true); err != nil {
+			fmt.Println("Error deleting queue items (remove and blocklist):", err)
+		}
+	}
+	if len(deleteRemoveAndBlocklistAndSearch) > 0 {
+		if err := a.DeleteBulk(deleteRemoveAndBlocklistAndSearch, true, true, false); err != nil {
+			fmt.Println("Error deleting queue items (remove and blocklist and search):", err)
+		}
+	}
+
 	if len(manualImports) > 0 {
 		go func() {
 			if err := a.ManualImportItems(manualImports); err != nil {
-				// log error
 				fmt.Println("Error during manual import:", err)
 			}
 		}()
