@@ -236,3 +236,83 @@ func TestRenameMediaFilesFallbackForUUIDFilenames(t *testing.T) {
 		t.Fatalf("expected fallback names for UUID files, got %q and %q", files[0].Name, files[1].Name)
 	}
 }
+
+func TestDetermineNZBNameAndExtractPassword(t *testing.T) {
+	tests := []struct {
+		name         string
+		filename     string
+		meta         map[string]string
+		wantName     string
+		wantPassword string
+	}{
+		{
+			name:         "Braces format with extension",
+			filename:     "Some.Movie.2024.1080p{{secret_password}}.nzb",
+			meta:         nil,
+			wantName:     "Some.Movie.2024.1080p",
+			wantPassword: "secret_password",
+		},
+		{
+			name:         "Password equals hyphen format",
+			filename:     "Some.Release-password=12345",
+			meta:         nil,
+			wantName:     "Some.Release",
+			wantPassword: "12345",
+		},
+		{
+			name:         "Password equals underscore format",
+			filename:     "Some.Release_password=abc.nzb",
+			meta:         nil,
+			wantName:     "Some.Release",
+			wantPassword: "abc",
+		},
+		{
+			name:         "Password equals dot format",
+			filename:     "Some.Release.password=xyz.nzb",
+			meta:         nil,
+			wantName:     "Some.Release",
+			wantPassword: "xyz",
+		},
+		{
+			name:         "Password equals space format",
+			filename:     "Some.Release password=hello.nzb",
+			meta:         nil,
+			wantName:     "Some.Release",
+			wantPassword: "hello",
+		},
+		{
+			name:         "No password",
+			filename:     "NoPassword.nzb",
+			meta:         nil,
+			wantName:     "NoPassword",
+			wantPassword: "",
+		},
+		{
+			name:     "Fallback to Meta Name with braces",
+			filename: "",
+			meta:     map[string]string{"Name": "Title{{pass}}"},
+			wantName: "Title",
+			wantPassword: "pass",
+		},
+		{
+			name:     "Fallback to Meta title with equals",
+			filename: "",
+			meta:     map[string]string{"title": "AnotherTitle password=foo"},
+			wantName: "AnotherTitle",
+			wantPassword: "foo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotPassword := determineNZBNameAndExtractPassword(tt.filename, tt.meta)
+			if gotName != tt.wantName {
+				t.Errorf("determineNZBNameAndExtractPassword() name = %q, want %q", gotName, tt.wantName)
+			}
+			if gotPassword != tt.wantPassword {
+				t.Errorf("determineNZBNameAndExtractPassword() password = %q, want %q", gotPassword, tt.wantPassword)
+			}
+		})
+	}
+}
+

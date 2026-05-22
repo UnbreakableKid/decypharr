@@ -141,13 +141,18 @@ func (p *NZBParser) Parse(ctx context.Context, filename string, content []byte) 
 		return nil, nil, fmt.Errorf("failed to parse NZB content: %w", err)
 	}
 
+	cleanName, extPassword := determineNZBNameAndExtractPassword(filename, raw.Meta)
+
 	// Create base NZB structure
 	nzb = &storage.NZB{
 		Files:    []storage.NZBFile{},
 		Status:   "parsed",
-		Name:     determineNZBName(filename, raw.Meta),
+		Name:     cleanName,
 		Title:    raw.Meta["title"],
 		Password: raw.Meta["password"],
+	}
+	if nzb.Password == "" {
+		nzb.Password = extPassword
 	}
 	// Group files by base Name and type
 	fileGroups := p.groupFiles(ctx, raw.Files)

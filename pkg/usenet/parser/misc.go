@@ -131,16 +131,43 @@ func getGroupsList(groups map[string]struct{}) []string {
 	return result
 }
 
-func determineNZBName(filename string, meta map[string]string) string {
-	// Prefer filename if it exists
+var (
+	pwBracesRegex = regexp.MustCompile(`(?i)\{\{([^}]+)\}\}`)
+	pwEqualsRegex = regexp.MustCompile(`(?i)[\s\-_.]password=(.+)$`)
+)
+
+func determineNZBNameAndExtractPassword(filename string, meta map[string]string) (string, string) {
+	var rawName string
 	if filename != "" {
-		filename = strings.TrimSuffix(filename, filepath.Ext(filename))
+		ext := filepath.Ext(filename)
+		if extLower := strings.ToLower(ext); extLower == ".nzb" || extLower == ".xml" {
+			rawName = strings.TrimSuffix(filename, ext)
+		} else {
+			rawName = filename
+		}
 	} else if name := meta["Name"]; name != "" {
-		filename = name
+		rawName = name
 	} else if title := meta["title"]; title != "" {
-		filename = title
+		rawName = title
 	}
-	return utils.RemoveInvalidChars(filename)
+
+	var password string
+	if matches := pwBracesRegex.FindStringSubmatch(rawName); len(matches) == 2 {
+		password = matches[1]
+		rawName = pwBracesRegex.ReplaceAllString(rawName, "")
+	} else if matches := pwEqualsRegex.FindStringSubmatch(rawName); len(matches) == 2 {
+		password = matches[1]
+		rawName = pwEqualsRegex.ReplaceAllString(rawName, "")
+	}
+
+	cleanName := utils.RemoveInvalidChars(rawName)
+	cleanName = strings.TrimSpace(cleanName)
+	return cleanName, password
+}
+
+func determineNZBName(filename string, meta map[string]string) string {
+	name, _ := determineNZBNameAndExtractPassword(filename, meta)
+	return name
 }
 
 func determineExtension(group *FileGroup) string {
