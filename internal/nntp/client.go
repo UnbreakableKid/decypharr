@@ -300,6 +300,8 @@ func (c *Client) ExecuteWithFailover(ctx context.Context, fn func(conn *Connecti
 			continue
 		}
 
+		c.logger.Debug().Str("provider", provider.Host).Msg("Using Usenet provider")
+
 		var currentConn = conn
 		err = retry.Do(
 			func() error {
@@ -367,9 +369,11 @@ func (c *Client) ExecuteWithFailover(ctx context.Context, fn func(conn *Connecti
 			switch nntpErr.Type {
 			case ErrorTypeArticleNotFound:
 				// Article doesn't exist on this provider - try next
+				c.logger.Info().Str("provider", provider.Host).Msg("Article not found on provider, trying next provider")
 				continue
 			case ErrorTypeConnection, ErrorTypeTimeout, ErrorTypeServerBusy:
 				// All retries exhausted for this provider - try next
+				c.logger.Warn().Str("provider", provider.Host).Err(err).Msg("Retries exhausted or connection failed, failing over to next provider")
 				continue
 			default:
 				// Non-retriable protocol error - no point trying other providers
@@ -377,6 +381,7 @@ func (c *Client) ExecuteWithFailover(ctx context.Context, fn func(conn *Connecti
 			}
 		} else if customerror.IsPanicError(err) {
 			// Panic in the operation itself - try next provider
+			c.logger.Warn().Str("provider", provider.Host).Err(err).Msg("Panic in Usenet provider operation, failing over to next provider")
 			continue
 		} else {
 			return err
@@ -617,6 +622,8 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 
 	// Clear deadline for normal operation
 	_ = netConn.SetDeadline(time.Time{})
+
+	c.logger.Info().Str("provider", provider.Host).Msg("Established new connection to Usenet provider")
 
 	return conn, nil
 }
@@ -978,6 +985,11 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 		if len(queryIdxs) == 0 {
 			continue
 		}
+
+		c.logger.Debug().
+			Str("provider", provider.Host).
+			Int("message_count", len(chunkIDs)).
+			Msg("Running batch STAT on Usenet provider")
 
 		providerResults, err := c.batchStatOnProvider(ctx, provider, chunkIDs)
 		if err != nil && len(providerResults) == 0 {
