@@ -156,6 +156,34 @@ func (p *NZBParser) Parse(ctx context.Context, filename string, content []byte) 
 	if nzb.Password == "" {
 		nzb.Password = extPassword
 	}
+
+	// Stat the first segment of the first available file to confirm connectivity and existence before doing heavy parsing/detection
+	if p.manager != nil {
+		checked := false
+		for _, file := range raw.Files {
+			if len(file.Segments) == 0 {
+				continue
+			}
+			fileType := p.detectFileType(file.Filename)
+			if fileType == storage.NZBFileTypePar2 || fileType == storage.NZBFileTypeIgnore {
+				continue
+			}
+			segment := file.Segments[0]
+			err = p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
+				_, _, statErr := conn.Stat(segment.Id)
+				return statErr
+			})
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to stat segment %s <%s>: %w", file.Filename, segment.Id, err)
+			}
+			checked = true
+			break
+		}
+		if !checked {
+			return nil, nil, fmt.Errorf("no segments available to stat in NZB")
+		}
+	}
+
 	// Group files by base Name and type
 	fileGroups := p.groupFiles(ctx, raw.Files)
 
@@ -164,27 +192,6 @@ func (p *NZBParser) Parse(ctx context.Context, filename string, content []byte) 
 	}
 
 	p.logger.Debug().Int("groups", len(fileGroups)).Msg("NZB file groups created")
-
-	// Stat the first segment to confirm connectivity
-	checked := false
-	for _, group := range fileGroups {
-		if len(group.Files) == 0 || len(group.Files[0].Segments) == 0 {
-			continue
-		}
-		segment := group.Files[0].Segments[0]
-		err = p.manager.ExecuteWithFailover(ctx, func(conn *nntp.Connection) error {
-			_, _, statErr := conn.Stat(segment.Id)
-			return statErr
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to stat segment %s <%s>: %w", group.ActualFilename, segment.Id, err)
-		}
-		checked = true
-		break
-	}
-	if !checked {
-		return nil, nil, fmt.Errorf("no segments available to stat in NZB")
-	}
 
 	nzb.ID = uuid.New().String()
 	return nzb, fileGroups, nil

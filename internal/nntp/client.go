@@ -369,7 +369,7 @@ func (c *Client) ExecuteWithFailover(ctx context.Context, fn func(conn *Connecti
 			switch nntpErr.Type {
 			case ErrorTypeArticleNotFound:
 				// Article doesn't exist on this provider - try next
-				c.logger.Info().Str("provider", provider.Host).Msg("Article not found on provider, trying next provider")
+				c.logger.Debug().Str("provider", provider.Host).Msg("Article not found on provider, trying next provider")
 				continue
 			case ErrorTypeConnection, ErrorTypeTimeout, ErrorTypeServerBusy:
 				// All retries exhausted for this provider - try next
