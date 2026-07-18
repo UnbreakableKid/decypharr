@@ -672,7 +672,7 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	// Clear deadline for normal operation
 	_ = netConn.SetDeadline(time.Time{})
 
-	c.logger.Info().Str("provider", provider.Host).Msg("Established new connection to Usenet provider")
+	c.logger.Debug().Str("provider", provider.Host).Msg("Established new connection to Usenet provider")
 
 	return conn, nil
 }
