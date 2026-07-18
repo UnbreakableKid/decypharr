@@ -180,7 +180,7 @@ func TestCleanupQueueWithUsenetSample(t *testing.T) {
 
 	// Test 1: both marked as failed
 	bulkDeletedCount = 0
-	a := New("sonarr", server.URL, "dummy-token", true, false, nil, "", "manual")
+	a := New("sonarr", server.URL, "dummy-token", false, nil, "", "manual")
 	a.MarkAsFailedSample = true
 	a.MarkAsFailedUnableToDetermine = true
 

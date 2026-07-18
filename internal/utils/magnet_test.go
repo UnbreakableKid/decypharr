@@ -8,22 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/testutil"
 )
-
-func TestMain(m *testing.M) {
-	tempDir, err := os.MkdirTemp("", "decypharr-test-*")
-	if err != nil {
-		panic(err)
-	}
-
-	config.SetConfigPath(tempDir)
-
-	code := m.Run()
-	_ = os.RemoveAll(tempDir)
-	os.Exit(code)
-}
 
 // checkMagnet is a helper function that verifies magnet properties
 func checkMagnet(t *testing.T, magnet *Magnet, expectedInfoHash, expectedName, expectedLink string, expectedTrackerCount int, shouldBeTorrent bool) {
