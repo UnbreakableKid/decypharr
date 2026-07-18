@@ -22,6 +22,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type mountCacheCleaner interface {
+	CleanupCache() (map[string]any, error)
+}
+
+type mountCachePurger interface {
+	PurgeCache() (map[string]any, error)
+}
+
 func (s *Server) handleGetArrs(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, s.manager.Arr().GetAll(), http.StatusOK)
 }
@@ -59,7 +67,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	_arr := s.manager.Arr().Get(arrName)
 	if _arr == nil {
 		// These are not found in the config. They are throwaway arrs.
-		_arr = arr.New(arrName, "", "", false, false, downloadUncached, "", "")
+		_arr = arr.New(arrName, "", "", false, downloadUncached, "", "")
 	}
 
 	// Unified task type for all content types
@@ -75,7 +83,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 
 	// Collect torrent URLs
 	if urls := r.FormValue("urls"); urls != "" {
-		for _, u := range strings.Split(urls, "\n") {
+		for u := range strings.SplitSeq(urls, "\n") {
 			if trimmed := strings.TrimSpace(u); trimmed != "" {
 				magnet, err := utils.GetMagnetFromUrl(trimmed, rmTrackerUrls)
 				if err != nil {
@@ -116,7 +124,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 
 	// Collect NZB URLs
 	if nzbURLs := r.FormValue("nzbURLs"); nzbURLs != "" {
-		for _, u := range strings.Split(nzbURLs, "\n") {
+		for u := range strings.SplitSeq(nzbURLs, "\n") {
 			if trimmed := strings.TrimSpace(u); trimmed != "" {
 				filename, content, err := utils.DownloadFile(trimmed, utils.WithHeader("User-Agent", s.nzbUserAgent))
 				if err != nil {
@@ -216,6 +224,66 @@ func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, v, http.StatusOK)
 }
 
+func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, r *http.Request) {
+	mountMgr := s.manager.MountManager()
+	if mountMgr == nil || !mountMgr.IsReady() {
+		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	cleaner, ok := mountMgr.(mountCacheCleaner)
+	if !ok {
+		http.Error(w, "Manual cache cleanup is only available for DFS mounts", http.StatusBadRequest)
+		return
+	}
+
+	cleanupStats, err := cleaner.CleanupCache()
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to run mount cache cleanup")
+		http.Error(w, "Failed to run mount cache cleanup", http.StatusInternalServerError)
+		return
+	}
+
+	if s.stats != nil {
+		s.stats.Refresh()
+	}
+
+	utils.JSONResponse(w, map[string]any{
+		"status": "success",
+		"cache":  cleanupStats,
+	}, http.StatusOK)
+}
+
+func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
+	mountMgr := s.manager.MountManager()
+	if mountMgr == nil || !mountMgr.IsReady() {
+		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	purger, ok := mountMgr.(mountCachePurger)
+	if !ok {
+		http.Error(w, "Cache purge is only available for DFS mounts", http.StatusBadRequest)
+		return
+	}
+
+	purgeStats, err := purger.PurgeCache()
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to purge mount cache")
+		http.Error(w, "Failed to purge mount cache", http.StatusInternalServerError)
+		return
+	}
+
+	if s.stats != nil {
+		s.stats.Refresh()
+	}
+
+	utils.JSONResponse(w, map[string]any{
+		"status": "success",
+		"cache":  purgeStats,
+	}, http.StatusOK)
+}
+
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters for server-side filtering, sorting, and pagination
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -282,10 +350,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	// Apply pagination
 	var paginatedTorrents []*storage.Entry
 	if offset < total {
-		end := offset + limit
-		if end > total {
-			end = total
-		}
+		end := min(offset+limit, total)
 		paginatedTorrents = filteredTorrents[offset:end]
 	} else {
 		paginatedTorrents = []*storage.Entry{}
@@ -304,7 +369,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		categories = append(categories, c)
 	}
 
-	utils.JSONResponse(w, map[string]interface{}{
+	utils.JSONResponse(w, map[string]any{
 		"torrents":    paginatedTorrents,
 		"total":       total,
 		"page":        page,
@@ -468,17 +533,31 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// Sync arr storage with the new configuration
 	s.manager.Arr().SyncFromConfig(newConfig.Arrs)
 
-	// Save the updated config
+	// Save the updated config. This also applies defaults to newConfig, so the
+	// restart comparison below sees a fully-normalized config on both sides.
 	if err := newConfig.Save(); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to save config")
 		http.Error(w, "Error saving config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Restart services asynchronously
-	go s.Restart()
+	// Only restart when a field that needs it actually changed (HTTP bind,
+	// debrid/usenet clients, or the mount). For everything else, apply the new
+	// config live so users aren't disrupted by a full restart on every save.
+	restarted := config.Get().RequiresRestart(&newConfig)
+	if restarted {
+		go s.Restart()
+	} else {
+		config.Get().ApplyRuntime(&newConfig)
+		// Reschedule/reapply the repair sweep if its settings changed.
+		if svc := s.manager.Repair(); svc != nil {
+			if err := svc.ApplyConfig(); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to apply repair config after live update")
+			}
+		}
+	}
 
-	utils.JSONResponse(w, map[string]string{"status": "success"}, http.StatusOK)
+	utils.JSONResponse(w, map[string]any{"status": "success", "restarted": restarted}, http.StatusOK)
 }
 
 func (s *Server) handleGetRepairConfig(w http.ResponseWriter, r *http.Request) {
@@ -718,7 +797,7 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		// Returning the run record (when present) gives the caller the
 		// failure detail captured in storage as well as the message.
 		if run != nil {
-			utils.JSONResponse(w, map[string]interface{}{
+			utils.JSONResponse(w, map[string]any{
 				"error": err.Error(),
 				"run":   run,
 			}, status)
@@ -878,7 +957,7 @@ func (s *Server) handleRefreshAPIToken(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	utils.JSONResponse(w, map[string]interface{}{
+	utils.JSONResponse(w, map[string]any{
 		"token":   token,
 		"message": "API token refreshed successfully",
 	}, http.StatusOK)

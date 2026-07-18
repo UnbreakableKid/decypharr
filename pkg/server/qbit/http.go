@@ -122,14 +122,14 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	_arr := getArrFromContext(ctx)
 	if _arr == nil {
 		// Arr is not in context
-		_arr = arr.New(category, "", "", false, false, nil, "", "")
+		_arr = arr.New(category, "", "", false, nil, "", "")
 	}
 	atleastOne := false
 
 	// Handle magnet URLs
 	if urls := r.FormValue("urls"); urls != "" {
 		var urlList []string
-		for _, u := range strings.Split(urls, "\n") {
+		for u := range strings.SplitSeq(urls, "\n") {
 			urlList = append(urlList, strings.TrimSpace(u))
 		}
 		for _, url := range urlList {

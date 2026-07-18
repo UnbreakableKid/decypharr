@@ -58,24 +58,22 @@ type Arr struct {
 	Host  string `json:"host"`
 	Token string `json:"token"`
 
-	Type             Type           `json:"type"`
-	Cleanup          bool           `json:"cleanup"`
-	SkipRepair       bool           `json:"skip_repair"`
-	DownloadUncached *bool          `json:"download_uncached"`
-	SelectedDebrid   string         `json:"selected_debrid,omitempty"` // The debrid service selected for this arr
-	Source           Source         `json:"source,omitempty"`          // The source of the arr, e.g. "auto", "manual". Auto means it was automatically detected from the arr
+	Type                          Type           `json:"type"`
+	SkipRepair                    bool           `json:"skip_repair"`
+	DownloadUncached              *bool          `json:"download_uncached"`
+	SelectedDebrid                string         `json:"selected_debrid,omitempty"` // The debrid service selected for this arr
+	Source                        Source         `json:"source,omitempty"`          // The source of the arr, e.g. "auto", "manual". Auto means it was automatically detected from the arr
 	MarkAsFailedSample            bool           `json:"mark_as_failed_sample,omitempty"`
 	MarkAsFailedUnableToDetermine bool           `json:"mark_as_failed_unable_to_determine,omitempty"`
-	logger                  zerolog.Logger `json:"-"`
+	logger                        zerolog.Logger `json:"-"`
 }
 
-func New(name, host, token string, cleanup, skipRepair bool, downloadUncached *bool, selectedDebrid, source string) *Arr {
+func New(name, host, token string, skipRepair bool, downloadUncached *bool, selectedDebrid, source string) *Arr {
 	return &Arr{
 		Name:             name,
 		Host:             host,
 		Token:            strings.TrimSpace(token),
 		Type:             inferType(host, name),
-		Cleanup:          cleanup,
 		SkipRepair:       skipRepair,
 		DownloadUncached: downloadUncached,
 		SelectedDebrid:   selectedDebrid,
@@ -87,7 +85,7 @@ func New(name, host, token string, cleanup, skipRepair bool, downloadUncached *b
 // RequestCtx issues an HTTP request bound to ctx. Cancellation of ctx
 // cancels the in-flight HTTP call — this is what lets the repair pipeline
 // abort long Sonarr enumerations when a user presses Stop.
-func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload interface{}, res any) (*http.Response, error) {
+func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload any, res any) (*http.Response, error) {
 	if a.Token == "" || a.Host == "" {
 		return nil, fmt.Errorf("arr not configured")
 	}
@@ -137,7 +135,7 @@ func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload i
 
 // Request is the no-context shim for legacy callers. Prefer RequestCtx for
 // any code path that should be cancellable (repair, etc.).
-func (a *Arr) Request(method, endpoint string, payload interface{}, res any) (*http.Response, error) {
+func (a *Arr) Request(method, endpoint string, payload any, res any) (*http.Response, error) {
 	return a.RequestCtx(context.Background(), method, endpoint, payload, res)
 }
 
@@ -183,7 +181,7 @@ func NewStorage() *Storage {
 			continue // Skip if host or token is not set
 		}
 		name := a.Name
-		as := New(name, a.Host, a.Token, a.Cleanup, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
+		as := New(name, a.Host, a.Token, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
 		as.MarkAsFailedSample = a.MarkAsFailedSample
 		as.MarkAsFailedUnableToDetermine = a.MarkAsFailedUnableToDetermine
 		if utils.ValidateURL(as.Host) != nil {
@@ -212,7 +210,7 @@ func (s *Storage) GetOrCreate(name string) *Arr {
 	}
 	arr, exists := s.arrs.Load(name)
 	if !exists {
-		return New(name, "", "", false, false, nil, "", "manual")
+		return New(name, "", "", false, nil, "", "manual")
 	}
 	return arr
 }
@@ -253,7 +251,6 @@ func (s *Storage) SyncToConfig() []config.Arr {
 				exists.Host = arr.Host
 			}
 			exists.Token = cmp.Or(exists.Token, arr.Token)
-			exists.Cleanup = arr.Cleanup
 			exists.SkipRepair = arr.SkipRepair
 			exists.DownloadUncached = arr.DownloadUncached
 			exists.SelectedDebrid = arr.SelectedDebrid
@@ -263,14 +260,13 @@ func (s *Storage) SyncToConfig() []config.Arr {
 		} else {
 			// AddOrUpdate new arr config
 			arrConfigs[name] = config.Arr{
-				Name:                    arr.Name,
-				Host:                    arr.Host,
-				Token:                   arr.Token,
-				Cleanup:                 arr.Cleanup,
-				SkipRepair:              arr.SkipRepair,
-				DownloadUncached:        arr.DownloadUncached,
-				SelectedDebrid:          arr.SelectedDebrid,
-				Source:                  string(arr.Source),
+				Name:                          arr.Name,
+				Host:                          arr.Host,
+				Token:                         arr.Token,
+				SkipRepair:                    arr.SkipRepair,
+				DownloadUncached:              arr.DownloadUncached,
+				SelectedDebrid:                arr.SelectedDebrid,
+				Source:                        string(arr.Source),
 				MarkAsFailedSample:            arr.MarkAsFailedSample,
 				MarkAsFailedUnableToDetermine: arr.MarkAsFailedUnableToDetermine,
 			}
@@ -288,7 +284,7 @@ func (s *Storage) SyncToConfig() []config.Arr {
 func (s *Storage) SyncFromConfig(arrs []config.Arr) {
 	newMaps := xsync.NewMap[string, *Arr]()
 	for _, a := range arrs {
-		as := New(a.Name, a.Host, a.Token, a.Cleanup, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
+		as := New(a.Name, a.Host, a.Token, a.SkipRepair, a.DownloadUncached, a.SelectedDebrid, a.Source)
 		as.MarkAsFailedSample = a.MarkAsFailedSample
 		as.MarkAsFailedUnableToDetermine = a.MarkAsFailedUnableToDetermine
 		newMaps.Store(a.Name, as)
@@ -316,7 +312,7 @@ func (s *Storage) Monitor() {
 	wg := sync.WaitGroup{}
 	wg.Add(s.arrs.Size())
 	s.arrs.Range(func(name string, arr *Arr) bool {
-		_, _, _ = s.sg.Do(fmt.Sprintf("cleanup_%s", arr.Name), func() (interface{}, error) {
+		_, _, _ = s.sg.Do(fmt.Sprintf("cleanup_%s", arr.Name), func() (any, error) {
 			go func() {
 				defer wg.Done()
 				if err := arr.CleanupQueue(); err != nil {

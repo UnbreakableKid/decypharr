@@ -27,8 +27,8 @@ type SetupState struct {
 
 // SetupWizardRequest represents a request from the setup wizard
 type SetupWizardRequest struct {
-	Step int                    `json:"step"`
-	Data map[string]interface{} `json:"data"`
+	Step int            `json:"step"`
+	Data map[string]any `json:"data"`
 }
 
 // SetupWizardResponse represents the response from setup wizard
@@ -38,7 +38,7 @@ type SetupWizardResponse struct {
 	Error        string      `json:"error,omitempty"`
 	NextStep     int         `json:"next_step,omitempty"`
 	State        *SetupState `json:"state,omitempty"`
-	Validation   interface{} `json:"validation,omitempty"`
+	Validation   any         `json:"validation,omitempty"`
 	SetupNeeded  bool        `json:"setup_needed,omitempty"`
 	RedirectTo   string      `json:"redirect_to,omitempty"`
 	ConfigLoaded bool        `json:"config_loaded,omitempty"`
@@ -52,7 +52,7 @@ func (s *Server) SetupHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	data := map[string]interface{}{
+	data := map[string]any{
 		"URLBase": cfg.URLBase,
 		"Page":    "setup",
 		"Title":   "Setup Wizard",
@@ -166,6 +166,7 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 			"alldebrid":  true,
 			"debridlink": true,
 			"torbox":     true,
+			"premiumize": true,
 		}
 
 		if !validProviders[req.Debrid.Provider] {
@@ -218,6 +219,7 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 			Priority:       1,
 		}}
 		cfg.Usenet.MaxConnections = readerConnections
+		cfg.Usenet.ProcessingMaxConnections = readerConnections
 	} else {
 		cfg.Usenet.Providers = nil
 	}
@@ -240,8 +242,8 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	if len(cfg.Categories) == 0 {
 		cfg.Categories = []string{"sonarr", "radarr"}
 	}
-	if cfg.MaxDownloads == 0 {
-		cfg.MaxDownloads = 10
+	if cfg.MaxActiveDownloads == 0 {
+		cfg.MaxActiveDownloads = 5
 	}
 	cfg.Mount.Type = config.MountType(req.Mount.MountType)
 

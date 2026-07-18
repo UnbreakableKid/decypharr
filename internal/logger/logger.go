@@ -17,6 +17,9 @@ import (
 var (
 	once   sync.Once
 	logger zerolog.Logger
+
+	rotatingLogFileOnce sync.Once
+	rotatingLogFile     *lumberjack.Logger
 )
 
 func GetLogPath() string {
@@ -31,22 +34,32 @@ func GetLogPath() string {
 	return logsDir
 }
 
+// sharedRotatingLogFile returns the process-wide lumberjack writer. All
+// component loggers share one rotator so they don't race on the same file
+// (each *lumberjack.Logger runs its own mill goroutine and rotation cycle).
+func sharedRotatingLogFile() *lumberjack.Logger {
+	rotatingLogFileOnce.Do(func() {
+		rotatingLogFile = &lumberjack.Logger{
+			Filename:   filepath.Join(GetLogPath(), "decypharr.log"),
+			MaxSize:    10,
+			MaxAge:     15,
+			MaxBackups: 10,
+			Compress:   true,
+		}
+	})
+	return rotatingLogFile
+}
+
 func New(prefix string) zerolog.Logger {
 	level := config.Get().LogLevel
 
-	rotatingLogFile := &lumberjack.Logger{
-		Filename:   filepath.Join(GetLogPath(), "decypharr.log"),
-		MaxSize:    10,
-		MaxAge:     15,
-		MaxBackups: 10, // Limit backup files to prevent disk fill-up
-		Compress:   true,
-	}
+	rotatingLogFile := sharedRotatingLogFile()
 
 	consoleWriter := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
 		TimeFormat: "2006-01-02 15:04:05",
 		NoColor:    false, // Set to true if you don't want colors
-		FormatLevel: func(i interface{}) string {
+		FormatLevel: func(i any) string {
 			var colorCode string
 			switch strings.ToLower(fmt.Sprintf("%s", i)) {
 			case "debug":
@@ -66,7 +79,7 @@ func New(prefix string) zerolog.Logger {
 			}
 			return fmt.Sprintf("%s| %-6s|\033[0m", colorCode, strings.ToUpper(fmt.Sprintf("%s", i)))
 		},
-		FormatMessage: func(i interface{}) string {
+		FormatMessage: func(i any) string {
 			return fmt.Sprintf("[%s] %v", prefix, i)
 		},
 	}
@@ -75,10 +88,10 @@ func New(prefix string) zerolog.Logger {
 		Out:        rotatingLogFile,
 		TimeFormat: "2006-01-02 15:04:05",
 		NoColor:    true, // No colors in file output
-		FormatLevel: func(i interface{}) string {
+		FormatLevel: func(i any) string {
 			return strings.ToUpper(fmt.Sprintf("| %-6s|", i))
 		},
-		FormatMessage: func(i interface{}) string {
+		FormatMessage: func(i any) string {
 			return fmt.Sprintf("[%s] %v", prefix, i)
 		},
 	}

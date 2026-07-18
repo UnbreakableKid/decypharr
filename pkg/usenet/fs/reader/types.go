@@ -67,6 +67,17 @@ const (
 
 	// StateFailed indicates the segment download failed permanently.
 	StateFailed
+
+	// StateEvicting indicates the evictor has reserved the segment and is
+	// punching its disk range. It is a transient state held only across the
+	// buffer Discard: the slot was OnDisk, will become Empty once the punch
+	// completes. Crucially, MarkFetching only transitions Empty->Fetching, so
+	// while a segment is Evicting no re-fetch can begin writing into the range
+	// being punched. This closes the race where a reader re-downloaded a
+	// segment in the gap between the evictor's state flip and its deferred
+	// Discard, only for the Discard to punch the freshly-written bytes back
+	// out — leaving the slot OnDisk but unreadable.
+	StateEvicting
 )
 
 func (s SegmentState) String() string {
@@ -79,6 +90,8 @@ func (s SegmentState) String() string {
 		return "Fetching"
 	case StateFailed:
 		return "Failed"
+	case StateEvicting:
+		return "Evicting"
 	default:
 		return "Unknown"
 	}
@@ -124,7 +137,8 @@ func DefaultConfig() Config {
 // config.Usenet.ReadAhead) into a segment count for the given segments.
 // This is what makes the configured read-ahead actually take effect — the
 // window was previously hardcoded to 8 segments (~6MB) regardless of config,
-// which was far too shallow to absorb provider jitter during playback.
+// which was far too shallow to absorb provider jitter during playback. A zero
+// size explicitly disables read-ahead for parsing and other probe-style reads.
 func PrefetchAheadSegments(readAheadBytes int64, segments []SegmentMeta) int {
 	const (
 		fallbackSegBytes = 750 * 1024 // typical usenet segment
@@ -132,16 +146,13 @@ func PrefetchAheadSegments(readAheadBytes int64, segments []SegmentMeta) int {
 		maxAhead         = 256 // matches the prefetch channel depth
 	)
 	if readAheadBytes <= 0 {
-		return DefaultConfig().PrefetchAhead
+		return 0
 	}
 	segBytes := int64(fallbackSegBytes)
 	if len(segments) > 0 && segments[0].Bytes > 0 {
 		segBytes = segments[0].Bytes
 	}
-	ahead := int(readAheadBytes / segBytes)
-	if ahead < minAhead {
-		ahead = minAhead
-	}
+	ahead := max(int(readAheadBytes/segBytes), minAhead)
 	if ahead > maxAhead {
 		ahead = maxAhead
 	}

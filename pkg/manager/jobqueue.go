@@ -3,11 +3,14 @@ package manager
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
@@ -22,19 +25,25 @@ const (
 
 // Job represents a unified processing job for both torrents and NZBs
 type Job struct {
-	ID        string
-	Type      JobType
-	Request   *ImportRequest               // The original import request
-	NZBMeta   *storage.NZB                 // NZB metadata (set after parse, before worker processes)
-	NZBGroups map[string]*parser.FileGroup // NZB file groups (set after parse)
-	Entry     *storage.Entry               // Entry created during processing
-	CreatedAt time.Time
+	ID             string
+	Type           JobType
+	Request        *ImportRequest               // The original import request
+	DebridTorrent  *debridTypes.Torrent         // Torrent placement created before the active-download gate
+	NZBMeta        *storage.NZB                 // NZB metadata parsed before the active-download gate
+	NZBGroups      map[string]*parser.FileGroup // NZB file groups parsed before the active-download gate
+	Entry          *storage.Entry               // Entry created during processing
+	ResumeExisting bool                         // Continue an already persisted provider placement
+	CreatedAt      time.Time
 }
 
 // NewJob creates a new job
 func NewJob(jobType JobType, req *ImportRequest) *Job {
+	id := ""
+	if req != nil {
+		id = req.Id
+	}
 	return &Job{
-		ID:        req.Id,
+		ID:        id,
 		Type:      jobType,
 		Request:   req,
 		CreatedAt: time.Now(),
@@ -53,6 +62,7 @@ type JobQueue struct {
 	maxWorkers int
 	logger     zerolog.Logger
 	wg         sync.WaitGroup
+	active     atomic.Int64
 
 	// processFunc is called by workers to process a job
 	processFunc func(ctx context.Context, job *Job)
@@ -113,6 +123,27 @@ func (q *JobQueue) Len() int {
 	return len(q.jobs)
 }
 
+// ActiveCount returns the number of jobs currently holding an active-download slot.
+func (q *JobQueue) ActiveCount() int {
+	return int(q.active.Load())
+}
+
+// Retry submits a job again after a delay without holding an active slot.
+func (q *JobQueue) Retry(job *Job, delay time.Duration) {
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-q.ctx.Done():
+			return
+		case <-timer.C:
+			if err := q.Submit(job); err != nil {
+				q.logger.Debug().Err(err).Str("job_id", job.ID).Msg("Failed to retry job")
+			}
+		}
+	}()
+}
+
 // Close signals all workers to stop and waits for them to finish
 func (q *JobQueue) Close() {
 	q.mu.Lock()
@@ -142,8 +173,28 @@ func (q *JobQueue) worker(id int) {
 			Int("queued", q.Len()).
 			Msg("Processing job")
 
-		q.processFunc(q.ctx, job)
+		q.active.Add(1)
+		q.runJob(job)
+		q.active.Add(-1)
 	}
+}
+
+// runJob executes a single job, recovering from panics so that one bad job
+// cannot permanently kill a worker goroutine. With a fixed worker pool, an
+// unrecovered panic per worker silently drained the pool to zero — leaving
+// every queued download stuck at 0% while the healthcheck still passed.
+func (q *JobQueue) runJob(job *Job) {
+	defer func() {
+		if r := recover(); r != nil {
+			q.logger.Error().
+				Str("job_id", job.ID).
+				Str("type", string(job.Type)).
+				Interface("panic", r).
+				Bytes("stack", debug.Stack()).
+				Msg("Recovered from panic while processing job")
+		}
+	}()
+	q.processFunc(q.ctx, job)
 }
 
 // pop removes and returns the next job, blocking if queue is empty.
@@ -156,7 +207,7 @@ func (q *JobQueue) pop() *Job {
 		q.cond.Wait()
 	}
 
-	if q.closed && len(q.jobs) == 0 {
+	if q.closed {
 		return nil
 	}
 

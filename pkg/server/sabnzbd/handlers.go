@@ -101,7 +101,7 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, nzoID := range strings.Split(nzoIDs, ",") {
+	for nzoID := range strings.SplitSeq(nzoIDs, ",") {
 		nzoID = strings.TrimSpace(nzoID)
 		if nzoID == "" {
 			continue // Skip empty IDs
@@ -246,7 +246,7 @@ func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
 	nzoIDsValue := r.URL.Query().Get("nzo_ids")
 	var nzoIDs []string
 	if nzoIDsValue != "" {
-		for _, id := range strings.Split(nzoIDsValue, ",") {
+		for id := range strings.SplitSeq(nzoIDsValue, ",") {
 			nzoIDs = append(nzoIDs, id)
 		}
 	}
@@ -277,7 +277,7 @@ func (s *SABnzbd) handleAddURL(w http.ResponseWriter, r *http.Request) {
 
 	if _arr == nil {
 		// If Arr is not in context, create a new one with default values
-		_arr = arr.New(cat, "", "", false, false, nil, "", "")
+		_arr = arr.New(cat, "", "", false, nil, "", "")
 	}
 
 	if r.Method != http.MethodPost {
@@ -351,7 +351,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 
 	if _arr == nil {
 		// If Arr is not in context, create a new one with default values
-		_arr = arr.New(cat, "", "", false, false, nil, "", "")
+		_arr = arr.New(cat, "", "", false, nil, "", "")
 	}
 
 	if r.Method != http.MethodPost {
@@ -496,7 +496,7 @@ func (s *SABnzbd) handleGetFiles(w http.ResponseWriter, r *http.Request) {
 	files := getNZBFiles(entry)
 
 	// SABnzbd returns files wrapped in a "files" object
-	response := map[string]interface{}{
+	response := map[string]any{
 		"files": files,
 	}
 	utils.JSONResponse(w, response, http.StatusOK)

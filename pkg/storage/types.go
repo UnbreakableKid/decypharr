@@ -412,6 +412,7 @@ func (e *Entry) MarkAsCompleted(contentPath string) {
 // MarkAsError marks the torrent as errored
 func (e *Entry) MarkAsError(err error) {
 	e.State = EntryStateError
+	e.Status = debridTypes.TorrentStatusError
 	e.IsDownloading = false
 	e.LastError = err.Error()
 	e.ErrorCount++
@@ -544,7 +545,7 @@ type CachedTorrent struct {
 	OriginalFilename string                       `json:"original_filename"` // Original filename
 	Size             int64                        `json:"size"`              // Size (legacy)
 	Bytes            int64                        `json:"bytes"`             // Actual bytes
-	Magnet           interface{}                  `json:"magnet"`            // Magnet (can be nil)
+	Magnet           any                          `json:"magnet"`            // Magnet (can be nil)
 	Files            map[string]*debridTypes.File `json:"files"`             // Files map
 	Status           string                       `json:"status"`            // Status from debrid
 	Added            string                       `json:"added"`             // Added timestamp

@@ -156,7 +156,7 @@ func (q *QBit) authenticate(category, username, password string) (*arr.Arr, erro
 				break
 			}
 		}
-		a = arr.New(category, username, password, false, false, downloadUncached, "", "auto")
+		a = arr.New(category, username, password, false, downloadUncached, "", "auto")
 	}
 	arrValidated := false // This is a flag to indicate if arr validation was successful
 	if (username == "" || password == "") && cfg.UseAuth {
@@ -191,7 +191,7 @@ func createSID(username, password string) string {
 	hash := sha256.Sum256([]byte(combined + cfg.SecretKey()))
 	hashStr := fmt.Sprintf("%x", hash)[:16] // First 16 chars
 	// Base64 encode
-	return base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf("%s|%s", combined, hashStr)))
+	return base64.URLEncoding.EncodeToString(fmt.Appendf(nil, "%s|%s", combined, hashStr))
 }
 
 func extractFromSID(sid string) (string, string, error) {

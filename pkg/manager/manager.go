@@ -81,9 +81,9 @@ type Manager struct {
 	// re-fires before the previous pass has updated the queue row.
 	processingEntries *xsync.Map[string, struct{}]
 
-	// NZB processing worker pool (unbounded queue)
-	nzbQueue      *nzbJobQueue
-	nzbWorkerStop chan struct{} // Signal to stop workers
+	// Unified active-download queue for torrent and NZB imports.
+	jobQueue  *JobQueue
+	nzbSyncMu sync.Mutex
 
 	// Notifications service
 	Notifications *notifications.Service
@@ -145,7 +145,7 @@ func New() *Manager {
 		migrationJobs:          xsync.NewMap[string, *storage.SwitcherJob](),
 		config:                 cfg,
 		arr:                    arr.NewStorage(),
-		queue:                  newQueue(ctx, strg, 1000, cfg.RemoveStalledAfter),
+		queue:                  newQueue(strg, cfg.RemoveStalledAfter),
 		ctx:                    ctx,
 		ready:                  make(chan struct{}),
 		streamClient:           streamClient,
@@ -181,7 +181,7 @@ func (m *Manager) init() {
 	m.config = cfg
 
 	// Recreate queue with new config
-	m.queue = newQueue(m.ctx, m.storage, 1000, cfg.RemoveStalledAfter)
+	m.queue = newQueue(m.storage, cfg.RemoveStalledAfter)
 
 	// Clear debrid clients so they get recreated with new config
 	m.clients = xsync.NewMap[string, debrid.Client]()
@@ -232,6 +232,9 @@ func (m *Manager) init() {
 
 	// Initialize repair service. It registers with the scheduler in StartWorker.
 	m.repair = NewRepair(m)
+
+	// Initialize the unified active-download queue after all processors exist.
+	m.initJobQueue()
 }
 
 func (m *Manager) initUsenet() {
@@ -242,21 +245,6 @@ func (m *Manager) initUsenet() {
 		return
 	}
 	m.usenet = usenetClient
-
-	// Initialize NZB processing worker pool
-	maxConcurrentNZB := m.config.Usenet.MaxConcurrentNZB
-	if maxConcurrentNZB <= 0 {
-		maxConcurrentNZB = 2
-	}
-
-	// Create unbounded job queue
-	m.nzbQueue = newNzbJobQueue()
-	m.nzbWorkerStop = make(chan struct{})
-
-	// Start worker goroutines
-	for i := 0; i < maxConcurrentNZB; i++ {
-		go m.nzbWorker(i)
-	}
 }
 
 // initLinkService initializes the link service
@@ -272,38 +260,81 @@ func (m *Manager) initLinkService() {
 	)
 }
 
-// nzbWorker processes NZB jobs from the queue
-func (m *Manager) nzbWorker(id int) {
+func (m *Manager) initJobQueue() {
+	m.jobQueue = NewJobQueue(m.ctx, m.config.MaxActiveDownloads, m.processJob)
+	// Restore persisted active/queued downloads in the background. With large
+	// queues this re-parses thousands of NZBs over the network, and running it
+	// inline blocked manager construction — and therefore the HTTP server —
+	// for 60-90 minutes on big libraries, during which every arr reported
+	// "download client unavailable". Backgrounding lets the API serve and the
+	// worker pool drain immediately while the restore catches up.
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				m.logger.Error().Interface("panic", r).Msg("Recovered from panic while restoring active downloads")
+			}
+		}()
+		m.restoreActiveDownloadJobs()
+	}()
+}
+
+func (m *Manager) processJob(ctx context.Context, job *Job) {
+	if job == nil {
+		return
+	}
+	if job.Entry != nil && job.Request == nil && job.DebridTorrent == nil && job.NZBMeta == nil && !job.ResumeExisting {
+		m.waitForDownloadCompletion(ctx, job.Entry)
+		return
+	}
+
+	var err error
+	switch job.Type {
+	case JobTypeTorrent:
+		err = m.processTorrentJob(ctx, job)
+	case JobTypeNZB:
+		err = m.processNZBJob(ctx, job)
+	default:
+		err = fmt.Errorf("unknown job type: %s", job.Type)
+	}
+
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if isTooManyActiveDownloads(err) {
+			if job.Entry != nil {
+				job.Entry.Status = debridTypes.TorrentStatusQueued
+				_ = m.queue.Update(job.Entry)
+			}
+			m.jobQueue.Retry(job, 30*time.Second)
+			return
+		}
+		m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")
+		if job.Entry != nil {
+			job.Entry.MarkAsError(err)
+			_ = m.queue.Update(job.Entry)
+		}
+		return
+	}
+
+	m.waitForDownloadCompletion(ctx, job.Entry)
+}
+
+func (m *Manager) waitForDownloadCompletion(ctx context.Context, entry *storage.Entry) {
+	if entry == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
-		// Check for stop signal
+		current, err := m.queue.GetTorrent(entry.InfoHash)
+		if err != nil || current.State != storage.EntryStateDownloading {
+			return
+		}
 		select {
-		case <-m.nzbWorkerStop:
-			m.logger.Debug().Int("worker_id", id).Msg("NZB worker stopped")
+		case <-ctx.Done():
 			return
-		default:
-		}
-
-		// Pop blocks until a job is available or queue is closed
-		job, ok := m.nzbQueue.Pop()
-		if !ok {
-			m.logger.Debug().Int("worker_id", id).Msg("NZB worker exiting (queue closed)")
-			return
-		}
-
-		m.logger.Debug().
-			Int("worker_id", id).
-			Str("name", job.entry.Name).
-			Int("queued", m.nzbQueue.Len()).
-			Msg("Processing NZB job")
-
-		if err := m.processNewNzb(job.entry, job.meta, job.groups); err != nil {
-			m.logger.Error().
-				Err(err).
-				Int("worker_id", id).
-				Str("name", job.entry.Name).
-				Msg("Error processing NZB")
-			job.entry.MarkAsError(err)
-			_ = m.queue.Update(job.entry)
+		case <-ticker.C:
 		}
 	}
 }
@@ -422,6 +453,11 @@ func (m *Manager) Stop() error {
 		}
 	}
 
+	if m.jobQueue != nil {
+		m.logger.Info().Msg("Closing active download queue")
+		m.jobQueue.Close()
+	}
+
 	// Close usenet connection manager if active
 	if m.usenet != nil {
 		m.logger.Info().Msg("Closing usenet connections")
@@ -469,7 +505,7 @@ func (m *Manager) Reset() error {
 	return nil
 }
 
-func (m *Manager) GetStats() (map[string]interface{}, error) {
+func (m *Manager) GetStats() (map[string]any, error) {
 	count, err := m.storage.Count()
 	if err != nil {
 		return nil, err
@@ -491,9 +527,9 @@ func (m *Manager) GetStats() (map[string]interface{}, error) {
 		return true
 	})
 
-	return map[string]interface{}{
+	return map[string]any{
 		"total_torrents": count,
-		"storage_stats":  map[string]interface{}{"total_size": diskSize},
+		"storage_stats":  map[string]any{"total_size": diskSize},
 		"active_jobs":    activeJobs,
 		"completed_jobs": completedJobs,
 		"failed_jobs":    failedJobs,
@@ -605,56 +641,10 @@ func (m *Manager) GetMigrationJob(jobID string) (*storage.SwitcherJob, error) {
 	return job, nil
 }
 
-// === Queue ===
-
-func (m *Manager) trackAvailableSlots(ctx context.Context) {
-	// This function tracks the available slots for each debrid client
-	availableSlots := make(map[string]int)
-
-	m.clients.Range(func(name string, client debrid.Client) bool {
-		slots, err := client.GetAvailableSlots()
-		if err != nil {
-			return true
-		}
-		availableSlots[name] = slots
-		return true
-	})
-
-	if len(availableSlots) == 0 {
-		return // No debrid clients or slots available, nothing to process
+// SubmitJob submits an import to the unified active-download queue.
+func (m *Manager) SubmitJob(job *Job) error {
+	if m.jobQueue == nil {
+		return fmt.Errorf("active download queue not initialized")
 	}
-
-	if m.queue.RequestsSize() <= 0 {
-		// Queue is empty, no need to process
-		return
-	}
-
-	for name, slots := range availableSlots {
-		m.logger.Debug().Msgf("Available slots for %s: %d", name, slots)
-		// If slots are available, process the next import request from the queue
-		for slots > 0 {
-			select {
-			case <-ctx.Done():
-				return // Exit if context is done
-			default:
-				if err := m.processFromQueue(ctx); err != nil {
-					m.logger.Error().Err(err).Msg("Error processing from queue")
-					return // Exit on error
-				}
-				slots-- // Decrease the available slots after processing
-			}
-		}
-	}
-}
-
-func (m *Manager) processFromQueue(ctx context.Context) error {
-	// Pop the next import request from the queue
-	importReq, err := m.queue.PopRequest()
-	if err != nil {
-		return err
-	}
-	if importReq == nil {
-		return nil
-	}
-	return m.AddNewTorrent(ctx, importReq)
+	return m.jobQueue.Submit(job)
 }

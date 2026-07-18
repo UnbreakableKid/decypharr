@@ -7,7 +7,7 @@ import (
 )
 
 type Debrid struct {
-	Provider                     string   `json:"provider,omitempty"` // realdebrid, alldebrid, debridlink, torbox
+	Provider                     string   `json:"provider,omitempty"` // realdebrid, alldebrid, debridlink, torbox, premiumize
 	Name                         string   `json:"name,omitempty"`
 	APIKey                       string   `json:"api_key,omitempty"`
 	DownloadAPIKeys              []string `json:"download_api_keys,omitempty"`
@@ -88,7 +88,7 @@ func validateDebrids(debrids []Debrid) error {
 
 func (c *Config) applyDebridEnvVars() {
 	// Debrid providers array
-	for i := 0; i < 10; i++ { // Support up to 10 debrid providers
+	for i := range 10 { // Support up to 10 debrid providers
 		prefix := fmt.Sprintf("DEBRIDS__%d__", i)
 		if val := getEnv(prefix + "NAME"); val != "" {
 			// Ensure array is large enough
